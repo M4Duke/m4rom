@@ -14,8 +14,10 @@ cas_out_close					.equ 0xbc8f
 cas_out_open					.equ 0xbc8c
 hi_kl_curr_selection 			.equ 0xb912
 mc_start_program		   		.equ 0xbd16
+
 rom_response					.equ	0xD000
 rom_config					.equ 0xD900
+sock_status					.equ	0xFE00
 
 FA_READ 						.equ	1
 FA_WRITE						.equ	2
@@ -52,6 +54,12 @@ C_HTTPGETMEM					.equ	0x4328
 C_COPYBUF						.equ	0x4329
 C_COPYFILE					.equ	0x432A
 C_ROMSUPDATE					.equ	0x432B
+C_NETSOCKET					.equ 0x4331
+C_NETCONNECT					.equ 0x4332
+C_NETCLOSE					.equ 0x4333
+C_NETSEND						.equ 0x4334
+C_NETRECV						.equ 0x4335
+C_NETHOSTIP					.equ 0x4336
 C_CONFIG						.equ 0x43FE
 
 
@@ -210,7 +218,7 @@ not_plus:
 			ret	
 
 init_msg:
-			.ascii " M4 Board V2.1"
+			.ascii " M4 Board V2.0"
 			.db 10, 13, 10, 13, 0x0
 
 			; ------------------------- strlen
@@ -1304,6 +1312,7 @@ div_ovfl:
 			pop	bc
 			ld	b,#0
 dir_loop1:
+
 			push	bc
 			ld	hl,#sdir_cmd
 			call	send_command
@@ -1339,18 +1348,68 @@ sdir_cont1:
 			ld	a,b
 			cp	c
 			jr	nz,next_column1
-			ld	b,#0				; reset column count
 			ld	a,#13
 			call	#0xbb5a
 			ld	a,#10
 			call	#0xbb5a
+		
 			jr	dir_loop1
 next_column1:
 			ld	a,#32
 			call	#0xbb5a
 			call	#0xbb5a
 			call	#0xbb5a
-			jr	dir_loop1
+			; check for ESC
+			call	check_esc_key
+			cp	#0xFC	; pressed twice ? ok leave...
+			jr	nz,dir_loop1
+			
+			ld	hl,#text_break
+			call	disp_msg
+			; exit
+			scf
+			sbc	a,a
+			ret	
+			
+check_esc_key:	di
+			push	bc
+			LD	A,#0x48
+			call	key_scan
+			BIT	2,A			; ESC 
+			jr	nz, esc_exit			
+
+esc_loop:		LD	A,#0x48
+			call	key_scan
+			BIT	2,A
+			jr	z, esc_loop	; it is released
+	
+			call	#0xBB03
+			call	#0xBB18
+esc_exit:
+			pop	bc
+			ei
+			ret
+			
+			; taken from http://www.cpcwiki.eu/index.php/Programming:Keyboard_scanning, thanks !
+key_scan:		ld	d,#0
+			ld	bc,#0xf782	; ppi port a out /c out 
+			out	(c),c 
+			ld	bc,#0xf40e	; select ay reg 14 on ppi port a 
+			out	(c),c 
+			ld	bc,#0xf6c0	; this value is an ay index (r14) 
+			out	(c),c 
+			out	(c),d 		; validate!! out (c),0
+			ld	bc,#0xf792	; ppi port a in/c out 
+			out	(c),c 
+			dec	b 
+			out	(c),a 		; send kbdline on reg 14 ay through ppi port a
+			ld 	b,#0xf4		; read ppi port a 
+			in	a,(c)		; e.g. ay r14 (ay port a) 
+			ld	bc,#0xf782	; ppi port a out / c out 
+			out	(c),c 
+			dec	b			; reset ppi write 
+			out	(c),d		; out (c),0
+			ret
 
 ; ------------------------- HTTP GET - download file from http to current path
 httpget:
@@ -1599,7 +1658,7 @@ erase_file:
 			; show error message
 			ld	hl,#rom_response+4
 			call	disp_msg
-erase_ok:		scf
+erase_ok:	scf
 			sbc	a,a
 			ret
 
@@ -2423,7 +2482,7 @@ romw_cont:
 			ld	c,#0x80 | FA_READ|FA_WRITE
 			ld	a,#18
 			ld	de, #C_OPEN
-			call	send_command2	
+			call	send_command2	; will do cmd(2, DE), size(1, A), mode (1, C) followed by data in HL with A size.
 			ld	hl,#rom_response+3
 			ld	b,(hl)		; fd
 			inc	hl
@@ -2450,7 +2509,7 @@ romw_cont:
 			ld	hl, #rom_update_slot	; data read earlier
 			ld	c, -1(iy)
 			ld	a, #5
-			call	send_command2	
+			call	send_command2	; will do cmd(2, DE), size(1, A), fd (1, C) followed by data in HL with A size.
 			
 			ld	a, -1(iy)
 			call	fclose
@@ -2542,6 +2601,37 @@ rom_update:
 			sbc	a,a
 			ret	
 			
+;---------------------------------------
+; Helper functions
+			
+			
+hsend:        		;A=source bank, HL=source address, D-1,E=length, IYL=network daemon bank, IX=return address, BC=#7F00
+    			out	(c),a			;switch to application bank
+    			ld	b,#0xfe
+hsend_loop:
+			inc	b
+			outi				;copy data from application memory to m4 dataport
+			dec	e
+			jr	nz,hsend_loop
+			dec	d
+			jr	nz,hsend_loop
+			ld	b,#0x7f
+			.db #0xfd
+			ld	a,l
+			out	(c),a			;switch back to network daemon bank
+			jp	(ix)			;return to network daemon
+
+hreceive:     	;A=destination bank, DE=destination address, IYH,C=length, HL=M4 buffer, IYL=network daemon bank, IX=return address, B=#7F 
+			out	(c),a			;switch to application bank
+			.db	#0xfd
+			ld	b,h
+			ldir				;copy data from m4 buffer to application memory
+			ld	b,#0x7f
+			.db	#0xfd
+			ld	a,l
+			out	(c),a			;switch back to network daemon bank
+			jp	(ix)		;return to network daemon 			
+		
 					
 data_0:		.db	0,1		
 romslots_fn:
@@ -2552,22 +2642,22 @@ romconfig_fn:
 			.db	0
 
 sdir_cmd:
-			.db 2
+			.db 2			; size
 			.dw C_READDIR	; command C_sdir
 
 sfree_cmd:
-			.db 2
+			.db 2			; size
 			.dw C_FREE	; command C_sdir
 
 seek_cmd:
-			.db 2
+			.db 2			; size
 			.dw C_SEEK	; command C_sdir
 
 eof_cmd:
 			.db 2
 			.dw	C_EOF
 debug_cmd:
-			.db 2
+			.db 2			; size
 			.dw 0x43FF	; command C_sdir
 
 
@@ -2587,9 +2677,10 @@ text_drive:
 			.db 10, 13
 			.ascii "Drive A: SD card"
 			.db 10, 13, 10, 13, 0
+text_break:	.ascii  "*Break*"
+			.db 10, 13, 0
 
-
-			.org rom_response
+.org rom_response
 			.ds	0x800
 
 
@@ -2597,13 +2688,26 @@ text_drive:
 .org	rom_config
 config:
 			.db	0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
-	
-
-			.org	0xFF00
-			.dw	#0x108	; rom version
+.org	sock_status
+sock_info:	.ds	20
+			; socket 0  status		[1]
+			; socket 0  notused		[1]
+			; socket 0  recv buf size[2]
+			; socket 1  status		[1]
+			; socket 1  notused		[1]
+			; socket 1  recv buf size[2]
+			; etc...
+			
+helper_functions:
+			.dw hsend
+			.dw hreceive
+.org	0xFF00
+			.dw	#0x109	; rom version
 			.dw	rom_response
 			.dw	rom_config
+			.dw	sock_info
+			.dw	helper_functions
 	
-			.org	0xFFFF
+.org	0xFFFF
 			.db	0xFF	
-			.AREA _DATA
+.AREA _DATA
