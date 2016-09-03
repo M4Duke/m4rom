@@ -15,8 +15,8 @@ cas_out_open					.equ 0xbc8c
 hi_kl_curr_selection 			.equ 0xb912
 mc_start_program		   		.equ 0xbd16
 
-rom_response					.equ	0xD000
-rom_config					.equ 0xD900
+rom_response					.equ	0xD400
+rom_config					.equ 0xE000
 sock_status					.equ	0xFE00
 
 FA_READ 						.equ	1
@@ -60,6 +60,11 @@ C_NETCLOSE					.equ 0x4333
 C_NETSEND						.equ 0x4334
 C_NETRECV						.equ 0x4335
 C_NETHOSTIP					.equ 0x4336
+C_NETRSSI						.equ 0x4337
+C_CONFIG						.equ 0x43FE
+C_NETBIND						.equ 0x4338
+C_NETLISTEN					.equ 0x4339
+C_NETACCEPT					.equ 0x433A
 C_CONFIG						.equ 0x43FE
 
 
@@ -151,20 +156,23 @@ get_iy_workspace:
 
 init_rom:		push de
 			push hl
-			ld	hl,#8
-			add	hl,sp
+			;ld	hl,#8
+			;add	hl,sp
 			push	af
 		
-			ld	a,(hl)
-			cp	#0x2e
-			jr	z,ok464
-			cp	#0x2b
-			jr	nz,nosign
-ok464:
-			inc hl
-			ld a,(hl)
-			cp #3
-			call z,boot_message
+			;ld	a,(hl)
+			;cp	#0x2e
+			;jr	z,ok464
+			;cp	#0x2b
+			;jr	nz,nosign
+;ok464:
+			;inc hl
+			;ld a,(hl)
+			;cp #3
+			
+			ld	a,(rom_config+10)
+			cp	#2
+			call nz,boot_message
 nosign:
 			pop	af
 			cp	#0			; normally a is 0, but if called by m4 bootrom a == rom number
@@ -178,23 +186,32 @@ nosign:
 			pop	hl
 			ld	de, #fio_jvec
 init_cont:			
-			ld	(iy),#8			; config size (to increase)
+			ld	(iy),#9			; config size+3 (to increase)
 			ld	1(iy),#C_CONFIG
 			ld	2(iy),#C_CONFIG>>8
-			ld	3(iy),l			; amsdos header ptr l
-			ld	4(iy),h			; amsdos header ptr h
-			ld	5(iy),e			; patch jump vector l
-			ld	6(iy),d			; patch jump vector h
-			ld	7(iy),a			; current rom
-			ld	8(iy),#0
+			ld	3(iy),#0			; config offset (0..251)
+			ld	4(iy),l			; amsdos header ptr l
+			ld	5(iy),h			; amsdos header ptr h
+			ld	6(iy),e			; patch jump vector l
+			ld	7(iy),d			; patch jump vector h
+			ld	8(iy),a			; current rom
+			ld	9(iy),#1			; only show boot message at cold boot (value here == 0)
 			
 			call	send_command_iy
+			
+			ld	(iy),#4
+			ld	1(iy),#C_CONFIG
+			ld	2(iy),#C_CONFIG>>8
+			ld	3(iy),#10			; config offset (0..251)
+			ld	4(iy),#0
+			call	send_command_iy
+			
+			
 			call	patch_fio
 			pop	hl
 			pop	de
 			and a
 			scf
-			
 			ret
 			
 init_plus:	ld	hl,#plus_packet
@@ -203,7 +220,7 @@ init_plus:	ld	hl,#plus_packet
 			ld	hl,#0
 			.db 0xc3,0x16, 0xbd
 			; set config offset 8 to +, to indicate it is a CPC+ 
-plus_packet:	.db	0x9,#C_CONFIG,#C_CONFIG>>8,0,0,0,0,0,1,'+'
+plus_packet:	.db	0xA,#C_CONFIG,#C_CONFIG>>8,0,0,0,0,0,0,1,'+'
 
 boot_message:
 			ld	a,(#rom_config+6)
@@ -531,6 +548,8 @@ open_fail:
 ; ------------------------- cas_in_close replacement BC7A
 
 _cas_in_close:
+			; detect
+			
 			ld	a,#1
 			call	fclose
 			cp	#0
@@ -1236,11 +1255,122 @@ fclose:
 			ld	3(iy),a			; fd
 			ld	(iy),#3	; size - cmd(2) + fd(1)
 			call send_command_iy
+			ld	a,(rom_response+3)
+			cp	#255
+			jp	nz,fclose_ok
+			
+			ld	a,(rom_config+10)
+			cp	#2	
+			jp	z,past_autoexec
+			inc	a
+			ld	(iy),#4
+			ld	1(iy),#C_CONFIG
+			ld	2(iy),#C_CONFIG>>8
+			ld	3(iy),#10			; config offset (0..251)
+			ld	4(iy),a	
+			call	send_command_iy
+			ld	a,(rom_config+10)
+			cp	#2
+			jp	nz, past_autoexec
+			
+			; run autoexec.bas if present
+			
+			ld	hl, #autoexec_fn
+			ld	c,#0x80 | FA_READ
+			ld	a,#17
+			ld	de, #C_OPEN
+			call	send_command2	
+			ld	hl,#rom_response+3
+			ld	b,(hl)		; fd
+			inc	hl
+			ld	a,(hl)		; res
+			cp	#0
+			jp	nz, past_autoexec
+			; get header
+			ld	a,b
+			ld	de,(#rom_config)
+			ld	hl, #128
+			push	af
+			call	fread
+			pop	af
+			; load addr 
+			call	get_iy_amsdos_header
+			ld	e,21(iy)
+			ld	d,22(iy)
+			; HL = file size
+			ld	l,24(iy)
+			ld	h,25(iy)
+	
+			call	get_iy_workspace
+			push	hl
+			push	af
+			call	fread
+			pop	af
+			ld	1(iy),#C_CLOSE		; close cmd
+			ld	2(iy),#C_CLOSE>>8	; close cmd
+			ld	3(iy),a			; fd
+			ld	(iy),#3	; size - cmd(2) + fd(1)
+			call send_command_iy
+			ld	c,#0
+			call	#0xB915	; probe rom
+			ld	a,h		; version
+			pop	hl
+			ld	bc,#0x170
+			add	hl,bc
+	
+			
+			cp	#0		; is basic 1.0
+			jr	z,basic10
+			; basic 1.1
+			ld (#0xAE66),hl
+			ld (#0xAE68),hl
+			ld (#0xAE6A),hl
+			ld (#0xAE6C),hl
+			jr	go_far
+basic10:
+			ld (#0xAE83),hl
+			ld (#0xAE85),hl
+			ld (#0xAE87),hl
+			ld (#0xAE89),hl	
+
+go_far:		pop	iy
+			pop	hl
+			pop	bc
+			cp	#0
+			jr	z,is464
+			cp	#1
+			jr	z,is664
+			.db	0xDF
+			.dw far_addr6128
+			ret
+is664:		.db	0xDF
+			.dw far_addr664
+			ret
+is464:		.db	0xDF
+			.dw far_addr464
+			ret
+far_addr464:	.dw	0xE9BD
+			.db	0
+far_addr664:	
+			.dw	0xEA7D
+			.db	0
+far_addr6128:	
+			.dw	0xEA78
+			.db	0
+				
+past_autoexec:	ld	a,#255		
+fclose_ok:	xor	a
 			pop	iy
 			pop	hl
 			pop	bc
 			ret
-; ------------------------- _cas_catalog replacement BC9B
+
+			
+			; ------------------------- _cas_catalog replacement BC9B
+			; input
+			; DE = workbuf
+			; return
+			; DE = workbuf
 _cas_catalog:
 			push	bc
 			push	de
@@ -1479,6 +1609,23 @@ netstat:
 			
 			ld	hl,#rom_response+3
 			call	disp_msg
+			ld	(iy),#2
+			ld	1(iy),#C_NETRSSI
+			ld	2(iy),#C_NETRSSI>>8
+			call	send_command_iy
+			ld	a,(rom_response+3)
+			cp	#31
+			jr	z,skip_signal
+			
+			ld	hl,#text_signal
+			call	disp_msg
+			ld	a,(rom_response+3)
+			call	disp_hex
+			ld	a,#10
+			call	#0xbb5a
+			ld	a,#13
+			call	#0xbb5a
+skip_signal:
 			scf
 			sbc	a,a
 			ret
@@ -2600,7 +2747,27 @@ rom_update:
 			scf
 			sbc	a,a
 			ret	
-			
+
+disp_hex:		ld	b,a
+			srl	a
+			srl	a
+			srl	a
+			srl	a
+			add	a,#0x90
+			daa
+			adc	a,#0x40
+			daa
+			call	#0xbb5a
+			ld	a,b
+			and	#0x0f
+			add	a,#0x90
+			daa
+			adc	a,#0x40
+			daa
+			call	#0xbb5a
+			ret
+
+
 ;---------------------------------------
 ; Helper functions
 			
@@ -2640,7 +2807,8 @@ romslots_fn:
 romconfig_fn:
 			.ascii "/m4/romconfig.bin"
 			.db	0
-
+autoexec_fn:	.ascii "/AUTOEXEC.BAS"
+			.db	0
 sdir_cmd:
 			.db 2			; size
 			.dw C_READDIR	; command C_sdir
@@ -2660,7 +2828,6 @@ debug_cmd:
 			.db 2			; size
 			.dw 0x43FF	; command C_sdir
 
-
 fail_msg:
 			.ascii "File not found or other error."
 			.db 10, 13, 0
@@ -2677,11 +2844,14 @@ text_drive:
 			.db 10, 13
 			.ascii "Drive A: SD card"
 			.db 10, 13, 10, 13, 0
-text_break:	.ascii  "*Break*"
+text_break:	.ascii "*Break*"
 			.db 10, 13, 0
+text_signal:	.ascii "Signal: 0x"
+			.db	0
 
+					
 .org rom_response
-			.ds	0x800
+			.ds	0xC00
 
 
 
@@ -2689,14 +2859,15 @@ text_break:	.ascii  "*Break*"
 config:
 			.db	0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
 .org	sock_status
-sock_info:	.ds	20
-			; socket 0  status		[1]
-			; socket 0  notused		[1]
-			; socket 0  recv buf size[2]
-			; socket 1  status		[1]
-			; socket 1  notused		[1]
-			; socket 1  recv buf size[2]
-			; etc...
+sock_info:	.ds	80	; 5 socket status structures (0 is used for gethostbyname*, 1-4 returned by socket function) of 16 bytes
+; structure layout
+;	status		1	- current status 0=idle, 1=connect in progress, 2=send in progress, 3=remote closed connectoion, 4=wait incoming (accept), 240-255 = error code
+;	lastcmd		1	- last command updating sock status 0=none, 1=send, 2=dnslookup, 3=connect, 4=accept, 5=recv, 6=error handler
+;	received		2	- data received in internal buffer (ready to get with C_NETRECV)
+;	ip_addr		4	- ip addr of connected client in passive mode
+;	port			2	- port of the same..
+;	reserved		6	- not used yet (alignment!).
+; *for socket 0, gethostbyname, status will be set to 5 when in progress and back to 0, when done.
 			
 helper_functions:
 			.dw hsend
