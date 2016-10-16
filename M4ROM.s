@@ -12,10 +12,19 @@ cas_in_close					.equ 0xbc7a
 cas_in_open					.equ 0xbc77
 cas_out_close					.equ 0xbc8f
 cas_out_open					.equ 0xbc8c
+cas_in_char					.equ 0xbc80
+cas_test_eof					.equ 0xbc89
+cas_out_open					.equ 0xbc8c
+cas_out_close					.equ 0xbc8f
+cas_out_char					.equ 0xbc95
+cas_out_direct					.equ 0xbc98
+cas_in_abandon					.equ 0xbc7d
+cas_out_abandon				.equ 0xbc92
+
 hi_kl_curr_selection 			.equ 0xb912
 mc_start_program		   		.equ 0xbd16
 
-rom_response					.equ	0xD400
+rom_response					.equ	0xD500
 rom_config					.equ 0xE000
 sock_status					.equ	0xFE00
 
@@ -42,6 +51,9 @@ C_MAKEDIR						.equ	0x4310
 C_FSIZE						.equ	0x4311
 C_READ2						.equ 0x4312
 C_GETPATH						.equ 0x4313
+C_SDREAD						.equ 0x4314
+C_SDWRITE						.equ 0x4315
+C_FSTAT						.equ 0x4316	
 C_HTTPGET						.equ 0x4320
 C_SETNETWORK					.equ 0x4321
 C_M4OFF						.equ	0x4322
@@ -61,12 +73,12 @@ C_NETSEND						.equ 0x4334
 C_NETRECV						.equ 0x4335
 C_NETHOSTIP					.equ 0x4336
 C_NETRSSI						.equ 0x4337
-C_CONFIG						.equ 0x43FE
 C_NETBIND						.equ 0x4338
 C_NETLISTEN					.equ 0x4339
 C_NETACCEPT					.equ 0x433A
+C_NETGETNETWORK				.equ 0x433B
 C_CONFIG						.equ 0x43FE
-
+UDIR_RAM_Address 				.equ 0xBEA3
 
 DATAPORT						.equ 0xFE00
 ACKPORT						.equ 0xFC00
@@ -77,6 +89,7 @@ ACKPORT						.equ 0xFC00
 			.dw	rsx_commands
 
 			; RSX jump block
+			
 			jp 	init_rom
 			jp	temp			; |A
 			jp	change_dir	; |CD
@@ -107,6 +120,12 @@ ACKPORT						.equ 0xFC00
 			jp	rom_upload	; |ROMUP
 			jp	rom_set		; |ROMSET
 			jp	rom_update	; |ROMUPD
+			jp	fcopy_file	; |FCP
+			jp 	directory		; |DIR
+			jp	UDIR
+			jp	GETPATH
+			jp	LongName
+			
 			.org 0xC072
   			jp	init_plus
 rsx_commands:
@@ -140,6 +159,11 @@ rsx_commands:
 			.ascis "ROMUP"
 			.ascis "ROMSET"
 			.ascis "ROMUPD"
+			.ascis "FCP"
+			.ascis "SDIR"
+			.ascis "UDIR"
+			.ascis "GETPATH"
+			.ascis "LONGNAME"
 			.db 0
 
 get_iy_amsdos_header:
@@ -170,9 +194,9 @@ init_rom:		push de
 			;ld a,(hl)
 			;cp #3
 			
-			ld	a,(rom_config+10)
-			cp	#2
-			call nz,boot_message
+			;ld	a,(rom_config+10)
+			;cp	#2
+			;call nz,boot_message
 nosign:
 			pop	af
 			cp	#0			; normally a is 0, but if called by m4 bootrom a == rom number
@@ -204,6 +228,7 @@ init_cont:
 			ld	2(iy),#C_CONFIG>>8
 			ld	3(iy),#10			; config offset (0..251)
 			ld	4(iy),#0
+			ld	5(iy),#0
 			call	send_command_iy
 			
 			
@@ -222,17 +247,15 @@ init_plus:	ld	hl,#plus_packet
 			; set config offset 8 to +, to indicate it is a CPC+ 
 plus_packet:	.db	0xA,#C_CONFIG,#C_CONFIG>>8,0,0,0,0,0,0,1,'+'
 
-boot_message:
-			ld	a,(#rom_config+6)
-			cp	#'+'	
-			jr	nz,not_plus
-			ld	a,(#rom_config+5)
-			cp	#1
-			ret	nz
-not_plus:			
-			ld	hl,#init_msg
-			call	disp_msg
-			ret	
+;boot_message:
+;			ld	a,(#rom_config+6)
+;			cp	#'+'	
+;			jr	nz,not_plus
+;			ld	a,(#rom_config+5)
+;			cp	#1
+;			ret	nz
+;not_plus:			
+;			ret	
 
 init_msg:
 			.ascii " M4 Board V2.0"
@@ -297,6 +320,31 @@ strcpy_loop:
 			pop	hl
 			pop	bc
 			ld	a,b
+			inc	a
+			ret
+
+			; same but remove spaces
+strcpynz:
+			push	bc
+			push	hl
+			push	de
+			ld	c,#0
+strcpy_loopnz:
+			ld	a,(hl)
+			cp	#32
+			jr	z,skip_space
+			ld	(de),a
+			inc	de
+			inc	c
+skip_space:			
+			inc	hl
+			djnz	strcpy_loopnz
+			xor	a
+			ld	(de),a
+			pop	de
+			pop	hl
+			ld	a,c
+			pop	bc
 			inc	a
 			ret
 
@@ -1272,8 +1320,13 @@ fclose:
 			ld	a,(rom_config+10)
 			cp	#2
 			jp	nz, past_autoexec
-			
+			xor	a
+			ld (UDIR_RAM_Address),a
+
 			; run autoexec.bas if present
+
+			ld	hl,#init_msg
+			call	disp_msg
 			
 			ld	hl, #autoexec_fn
 			ld	c,#0x80 | FA_READ
@@ -1286,6 +1339,8 @@ fclose:
 			ld	a,(hl)		; res
 			cp	#0
 			jp	nz, past_autoexec
+			
+			
 			; get header
 			ld	a,b
 			ld	de,(#rom_config)
@@ -1342,13 +1397,13 @@ go_far:		pop	iy
 			jr	z,is664
 			.db	0xDF
 			.dw far_addr6128
-			ret
+
 is664:		.db	0xDF
 			.dw far_addr664
-			ret
+
 is464:		.db	0xDF
 			.dw far_addr464
-			ret
+
 far_addr464:	.dw	0xE9BD
 			.db	0
 far_addr664:	
@@ -1359,7 +1414,7 @@ far_addr6128:
 			.db	0
 				
 past_autoexec:	ld	a,#255		
-fclose_ok:	xor	a
+fclose_ok:	;xor	a
 			pop	iy
 			pop	hl
 			pop	bc
@@ -1513,8 +1568,15 @@ esc_loop:		LD	A,#0x48
 			BIT	2,A
 			jr	z, esc_loop	; it is released
 	
-			call	#0xBB03
-			call	#0xBB18
+wait_key:		call	0xbb09
+			jr	nc, wait_key
+			cp	#0xFC
+			jr	z, esc_exit
+			cp	#32
+			jr	nz, wait_key
+			
+			;call	#0xBB03
+			;call	#0xBB18
 esc_exit:
 			pop	bc
 			ei
@@ -1607,8 +1669,19 @@ netstat:
 			ld	2(iy),#C_NETSTAT>>8
 			call	send_command_iy
 			
+			ld	hl,#rom_response
+			ld	a,(rom_response)
+			ld	e,a
+			ld	d,#0
+			add	hl,de
+			ld	a,(hl)
+			cp	#5
+			jr	z,is_connected
+			
 			ld	hl,#rom_response+3
 			call	disp_msg
+			jp	skip_signal
+is_connected:			
 			ld	(iy),#2
 			ld	1(iy),#C_NETRSSI
 			ld	2(iy),#C_NETRSSI>>8
@@ -1621,14 +1694,72 @@ netstat:
 			call	disp_msg
 			ld	a,(rom_response+3)
 			call	disp_hex
-			ld	a,#10
-			call	#0xbb5a
-			ld	a,#13
-			call	#0xbb5a
+			call	crlf
+			ld	(iy),#2
+			ld	1(iy),#C_NETGETNETWORK
+			ld	2(iy),#C_NETGETNETWORK>>8
+			call	send_command_iy
+			ld	hl,#text_ip
+			call	disp_msg
+			ld	hl,#rom_response+3+112
+			call	disp_ip		
+			ld	hl,#text_nm
+			call	disp_msg
+			ld	hl,#rom_response+3+116
+			call	disp_ip		
+			ld	hl,#text_gw
+			call	disp_msg
+			ld	hl,#rom_response+3+120
+			call	disp_ip		
+			ld	hl,#text_dns1
+			call	disp_msg
+			ld	hl,#rom_response+3+124
+			call	disp_ip
+			ld	hl,#text_dns2
+			call	disp_msg
+			ld	hl,#rom_response+3+128
+			call	disp_ip
+			ld	hl,#text_mac
+			call	disp_msg
+			ld	hl,#rom_response+3+190
+			call	disp_mac
+			
 skip_signal:
 			scf
 			sbc	a,a
 			ret
+disp_mac:		ld	b,#5
+disp_mac_loop:
+			push	hl
+			push bc
+			ld	a,(hl)
+			call	disp_hex
+			pop	bc
+			pop	hl
+			inc	hl
+			ld	a,#":"
+			call	#0xbb5a
+			djnz	disp_mac_loop
+			ld	a,(hl)
+			call	disp_hex
+			jp	crlf
+			
+disp_ip:		ld	b,#3
+disp_ip_loop:
+			push	hl
+			push	bc
+			call	dispdec
+			pop	bc
+			pop	hl
+			inc	hl
+			ld	a,#0x2e
+			call	#0xbb5a
+			djnz	disp_ip_loop
+			; last digit
+			call	dispdec
+			jp	crlf
+			
+			
 ; ------------------------- get time and date
 gettime:
 			call	get_iy_workspace
@@ -1927,7 +2058,156 @@ copy_file:
 			scf
 			sbc	a,a
 			ret
-						
+
+; ------------------------- copy file from floppy to sd
+fcopy_file:
+			cp	#2			; 2 arguments?
+			jp	nz, fcp_error
+			call	get_iy_workspace
+			ld	1(iy),#C_OPEN
+			ld	2(iy),#C_OPEN>>8
+			
+			; get dest path
+			ld	l,(ix)
+			ld	h,1(ix)
+			ld	c,(hl)	; string len
+			ld	b,#0
+			inc	hl
+			ld	e,(hl)	; string ptr lo
+			inc	hl
+			ld	d,(hl)	; string ptr hi
+			ex	de,hl
+			push	iy
+			pop	de
+			inc	de
+			inc	de
+			inc	de
+			inc	de
+			push	bc
+			ldir	
+			pop	bc
+			ex	de,hl	
+			dec	hl
+			ld	a,(hl)	
+			cp	#'/'		; does it end with slash
+			jr	z,has_slash
+			cp	#'\'
+			jr	z,has_slash
+			inc	hl
+			inc	c		; path len++
+			ld	a,#'/'
+			ld	(hl),a
+			
+has_slash:	inc	hl
+			; save end of path ptr and len
+			push	bc
+			push	hl
+			
+			
+			; get 2nd string (filename)
+		
+			ld	l,2(ix)
+			ld	h,3(ix)
+			ld	b,(hl)			; string len
+			inc	hl
+			ld	e,(hl)			; string ptr lo
+			inc	hl
+			ld	d,(hl)			; string ptr hi
+			pop	hl				; end of path
+			ex	de,hl
+			
+			call	strcpynz			; copy filename to end of path
+			; a = filename len + 1, b = filename len
+			pop	de				; current len of path
+			add	e				; add filename len to path len
+			add	#3				; + command (2) + mode (1)
+			ld	(iy),a			; total C_OPEN size
+			
+			; now lets open the file on disk via amsdos!
+			; hl still filename
+			ld	de,#0x9000		; use this as 2k buffer (dirty!)
+			call cas_in_open
+			jr	nc,fcp_error
+			
+			; ok we got the file, lets roll...
+			
+			ld	3(iy),#0x80 |FA_CREATE_ALWAYS| FA_WRITE
+			call	send_command_iy
+			ld	a,(#rom_response+4)
+			cp	#0
+			jr	nz,fcp_error
+			
+			
+			; get amsdos area
+			ld	hl,(#0xbe7d)
+			ld	bc,#85
+			add	hl,bc
+			push	hl
+			ld	bc,#18
+			add	hl,bc
+			ld	a,(hl)
+			pop	de
+			cp	#0x16
+			ld	a,(#rom_response+3)	; get fd
+			jr	z,fcopy_loop
+
+			; write header
+			
+			ld	hl, #0x80			; header size
+			push	af
+			call fwrite
+			pop	af
+			
+			; copy data
+fcopy_loop:
+			push	af	; save fd
+	
+			; fill buffer
+			ld	bc,#0
+fcopy_buffer:	
+			
+			call cas_in_char
+			jr	c, fcopy_cont
+			cp	#0x1A		; check for fake EOF
+			jr	nz,fcopy_done
+fcopy_cont:
+			inc	bc
+			ld	a,#0x8
+			cp	b		; #0x800 yet ?
+			jr	nz, fcopy_buffer
+			
+fcopy_done:	xor	a
+			cp	b
+			jr	nz, not_all_done
+			cp	c
+			jr	z, fcopy_finished
+			
+			; write data out
+
+not_all_done:	ld	l,c
+			ld	h,b
+			ld	de,#0x9000
+			pop	af
+			push	af
+			call fwrite
+			pop	af
+			
+			jr	fcopy_loop
+fcopy_finished:
+			pop	af		; file fd
+			call	fclose
+			call	cas_in_close
+			ret
+
+sd_open_error:	call	cas_in_close
+fcp_error:
+			ld	hl,#miss_arg
+			call	disp_msg
+			scf
+			sbc	a,a
+			ret
+
+							
 ; ------------------------- MKDIR - make directory
 makedir:
 			cp	#0
@@ -2153,7 +2433,7 @@ read_sector:
 disp_msg:		ld 	a, (hl)
 			or	a
 			ret	z
-			call 0xBB5A
+			call #0xBB5A
 			inc	hl
 			jr	disp_msg
 			
@@ -2438,11 +2718,6 @@ rom_upload:
 			jp	nz, bad_args
 			call	get_iy_workspace
 				
-			; get rom slot
-			
-			;ld	 ,(ix)
-			;ld	 ,1(ix)
-			
 			; get filename
 			
 			ld	l,2(ix)
@@ -2764,13 +3039,15 @@ disp_hex:		ld	b,a
 			daa
 			adc	a,#0x40
 			daa
-			call	#0xbb5a
-			ret
+			jp	0xbb5a
+			
 
 
 ;---------------------------------------
 ; Helper functions
-			
+
+
+; -- added Prodatron
 			
 hsend:        		;A=source bank, HL=source address, D-1,E=length, IYL=network daemon bank, IX=return address, BC=#7F00
     			out	(c),a			;switch to application bank
@@ -2798,7 +3075,316 @@ hreceive:     	;A=destination bank, DE=destination address, IYH,C=length, HL=M4 
 			ld	a,l
 			out	(c),a			;switch back to network daemon bank
 			jp	(ix)		;return to network daemon 			
+
+
+; --- added SOS
+
+
+UDIR:		ld a,(#UDIR_RAM_Address)
+			cp #0
+			ret z
+
+NextGetEntry:
+			call	get_iy_workspace
+			ld	(iy),#2
+			ld	1(iy),#C_READDIR
+			ld	2(iy),#C_READDIR>>8
+			call	send_command_iy
 		
+			ld	hl,#rom_response
+			ld	a,(hl)
+			cp	#2
+			jp	z,finished
+
+	
+			inc hl
+			inc hl
+			inc hl
+			ld a,(hl)
+			cp #0x3E ;">"
+			jr nz,FileFound
+			inc hl
+			ld bc,#16
+			jr CopyFileDir
+;--------------------------------------
+FileFound:
+			ld bc,#12
+CopyFileDir:	
+	; RAM:
+	; 464     	   664/6128
+	; aca4-ada5    ac8a-ad8b        *** ASCII-Puffer *** (INPUT, LIST)
+			ld de,#0xAC8B
+			ldir
+			push af
+			ld a,#0
+			ld (de),a
+			pop af
+			cp #0x3E ;">"
+			jp z,directoryfound
+			push hl
+			pop ix
+			ld hl,#0	
+			ld a,1(ix)
+			cp #32 ; " "
+			jr z,Space_Det1
+			sub #48 ;sub "0"
+			ld b,#0
+			ld c,a
+			ld de,#100
+			call mul16 ; This routine performs the operation DEHL=BC*DE
+Space_Det1:	
+			push hl
+			ld a,2(ix)
+			cp #32 ; " "
+			jr z,Space_Det2
+			sub #48 ;sub "0"
+			ld b,#0
+			ld c,a
+			ld de,#10
+			call mul16 ; This routine performs the operation DEHL=BC*DE
+
+Space_Det2:	
+			pop de
+			add hl,de
+			
+			ld a,3(ix)
+			cp #32 ; " "
+			jr z,Space_Det3
+			sub #48 ;sub "0"
+			ld b,#0
+			ld c,a
+			add hl,bc
+			ex de,hl
+Space_Det3:	
+	
+; Convert KB-Value to Bytes (10* Shift right) or *1024
+		ld bc,#1024
+			call mul16 ; performs DEHL = BC*DE
+			ex de,hl
+			ld ix,#0xAC8A + #0x100 - #4   ; Firmware 1.1
+			ld a,h
+			ld 3(ix),a
+			ld a,l
+			ld 2(ix),a
+			ld a,d
+			ld 1(ix),a
+			ld a,e
+			ld (ix),a
+
+
+			ld b,#0
+			jr goon
+directoryfound:
+			ld ix,#0xAC8A + #0x100 - #4   ; Firmware 1.1
+			ld 3(ix),#0
+			ld 2(ix),#0	
+			ld 1(ix),#0
+			ld (ix),#0
+			ld b,#1
+	
+goon:
+			; * HL = Location of null terminated file/folder name string
+			; *  B = File flag (1 = directory, 0 = file)
+			; At the same time, if you need it, you can get the size in bytes of the file. This is located in:
+			; * FILESIZE_CACHE_LSW          EQU BASIC_INPUT_AREA + $100 - 4
+			; * FILESIZE_CACHE_MSW          EQU BASIC_INPUT_AREA + $100 - 2 
+			; The only bad thing is BASIC_INPUT_AREA is in $AC8A in firmware 1.1, but it's in $ACA4 in firmware 1.0 (CPC 464 with original rom).
+			ld hl,#0xAC8B
+			call UDIR_RAM_Address
+			jp NextGetEntry
+	
+finished:
+			; ClearMemory
+			ld de,#0xAC8B
+			push de
+			pop hl
+			inc de
+			ld a,#0
+			ld (hl),a
+			ld bc,#12
+			ldir
+	
+			scf
+			sbc	a,a
+			ret
+
+GETPATH:
+			; IN: Normal behavour of RSX, OR A=255->DE=Buffferadress for Path
+			push af
+			cp #0xFF
+			jr z,GetPath2
+			ld de,#0xAC8B   ; ACMEDOS-Bug, uses &AC8B for BASIC 1.0
+GetPath2:	
+			push de		
+	
+			call	get_iy_workspace
+			ld	0(iy),#2
+			ld	1(iy),#C_GETPATH
+			ld	2(iy),#C_GETPATH>>8
+			call	send_command_iy
+			
+			ld	hl,#rom_response+#3			
+			ld a,(#rom_response)
+			sub #3 
+	
+			
+			; RAM:
+			; 464     	   664/6128
+			; ac80-ac91    ac66-ac77        EVERY/AFTER ,2 GOSUB
+			; ac92-aca3    ac78-ac89        EVERY/AFTER ,3 GOSUB
+			; aca4-ada5    ac8a-ad8b        *** ASCII-Puffer *** (INPUT, LIST)
+			
+			pop de
+	
+			;	ld de,0xAC8B   ; ACMEDOS-Bug, uses &AC8B for BASIC 1.0
+			ld b,#0
+			ld c,a
+	
+			; ignore first "/"
+			inc hl
+			dec bc
+			push de
+			ld a,c
+			cp #0
+			jr z,GetPath3
+			ldir
+GetPath3:
+			
+			
+			ld a,#00
+			ld (de),a
+			
+			pop hl
+			pop af
+			cp #0xFF
+			jr z,finished_GETPATH ; not called from Basic, so don't print path
+
+PrintPath:
+			ld a,(hl)
+			cp #0
+			jr z,finished_GETPATH
+			inc hl
+			call 0xbb5a
+			jr PrintPath
+finished_GETPATH:
+
+			scf
+			sbc	a,a
+			ret
+GetPathEnd:
+
+; ----------LONGNAME
+LongName:
+			; IN: Normal behavour of RSX, OR A=255->DE=Buffferadress for Path
+			cp	#0
+			jp	z,bad_args
+			push af
+			push de
+			call	get_iy_workspace
+			; get string
+			ld	l,(ix)
+			ld	h,1(IX)
+			ld	b,(hl)	; string len
+			inc	hl
+			ld	e,(hl)	; string ptr lo
+			inc	hl
+			ld	d,(hl)	; string ptr hi
+			ex	de,hl
+			
+			push	iy
+			ld	1(iy),#C_FSTAT
+			ld	2(iy),#C_FSTAT>>8
+			pop	de
+			inc	de
+			inc	de
+			inc	de
+			call	strcpy
+			add	a,#2
+			ld	(iy),a
+			call	send_command_iy
+			
+			ld	hl,#rom_response+3
+			ld	a,(hl)
+			cp	#0
+			jr	z,LongName_ok
+			; show error message
+			pop de
+			pop af
+			cp #0xff
+			jr z,LongNameExit
+			ld	hl,#rom_response+4
+			call	disp_msg
+LongNameExit:   			
+   			scf
+			sbc	a,a
+			ret
+;a4e8
+;af95 nein
+	
+LongName_ok:
+			pop de
+			pop af
+			ld hl,#rom_response+23+3
+			cp #0xFF
+			jr nz,PrintFileDirLongname
+LongName_CopyName:	
+			ld a,(hl)
+			ld (de),a
+			cp #0
+			jr z,LongNameExit
+			inc hl
+			inc de
+			jr LongName_CopyName
+			
+	
+PrintFileDirLongname:
+			ld a,(hl)
+			cp #0
+			jr z,LongNameExit
+			inc hl
+			call 0xbb5a
+			jr PrintFileDirLongname
+
+; --- EOF added by SOS
+dispdec:		ld	e,#0
+			ld	a,(hl)
+			ld	l,a
+			ld	h,#0
+			ld	bc,#-100
+			call	Num1
+			cp	#'0'
+			jr	nz,notlead0
+			ld	e,#1
+notlead0:		call	nz,0xBB5A
+			ld	c,#-10
+			call	Num1
+			cp	#'0'
+			jr	z, lead0_2
+			call	0xBB5A
+lead0_2_cont:	ld	c,b
+			call	Num1
+			jp	0xBB5A
+			
+Num1:		ld	a,#'0'-1
+Num2:		inc	a
+			add	hl,bc
+			jr	c,Num2
+			sbc	hl,bc
+			ret
+lead0_2:
+			ld	d,a
+			xor	a
+			cp	e
+			ld	a,d
+			call	z,0xBB5A
+			jr	lead0_2_cont
+						
+			
+
+crlf:		ld	a,#10
+			call	0xbb5a
+			ld	a,#13
+			jp	0xbb5a	
 					
 data_0:		.db	0,1		
 romslots_fn:
@@ -2839,7 +3425,19 @@ miss_arg:
 text_unkdir:
 			.ascii "Unknown directory."
 			.db 10, 13, 0
-
+text_ip:		.ascii "IP: "
+			.db 0
+text_nm:		.ascii "Netmask: "
+			.db 0
+text_gw:		.ascii "Gateway: "
+			.db 0
+text_dns1:	.ascii "DNS1: "
+			.db 0
+text_dns2:	.ascii "DNS2: "
+			.db 0
+text_mac:		.ascii "MAC: "
+			.db 0
+						
 text_drive:
 			.db 10, 13
 			.ascii "Drive A: SD card"
@@ -2873,7 +3471,7 @@ helper_functions:
 			.dw hsend
 			.dw hreceive
 .org	0xFF00
-			.dw	#0x109	; rom version
+			.dw	#0x110	; rom version
 			.dw	rom_response
 			.dw	rom_config
 			.dw	sock_info
