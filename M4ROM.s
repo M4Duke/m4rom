@@ -76,7 +76,7 @@ C_NETRSSI						.equ 0x4337
 C_NETBIND						.equ 0x4338
 C_NETLISTEN					.equ 0x4339
 C_NETACCEPT					.equ 0x433A
-C_NETGETNETWORK				.equ 0x433B
+C_GETNETWORK					.equ 0x433B
 C_CONFIG						.equ 0x43FE
 UDIR_RAM_Address 				.equ 0xBEA3
 
@@ -1494,6 +1494,16 @@ div_ovfl:
 			push	bc
 			ld	hl,#text_drive
 			call	disp_msg
+			; display current path
+			ld	0(iy),#2
+			ld	1(iy),#C_GETPATH
+			ld	2(iy),#C_GETPATH>>8
+			call	send_command_iy
+			ld	hl,#rom_response+3
+			call	disp_msg
+			call	crlf
+			call	crlf
+			
 			pop	bc
 			ld	b,#0
 dir_loop1:
@@ -1696,8 +1706,8 @@ is_connected:
 			call	disp_hex
 			call	crlf
 			ld	(iy),#2
-			ld	1(iy),#C_NETGETNETWORK
-			ld	2(iy),#C_NETGETNETWORK>>8
+			ld	1(iy),#C_GETNETWORK
+			ld	2(iy),#C_GETNETWORK>>8
 			call	send_command_iy
 			ld	hl,#text_ip
 			call	disp_msg
@@ -3440,8 +3450,8 @@ text_mac:		.ascii "MAC: "
 						
 text_drive:
 			.db 10, 13
-			.ascii "Drive A: SD card"
-			.db 10, 13, 10, 13, 0
+			.ascii "Drive A:"
+			.db 0	; 10, 13, 10, 13, 0
 text_break:	.ascii "*Break*"
 			.db 10, 13, 0
 text_signal:	.ascii "Signal: 0x"
