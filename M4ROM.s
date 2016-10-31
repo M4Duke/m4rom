@@ -6,78 +6,13 @@
 			.module cpc
 			.area _HEADER (ABS)
 			.org 0xC000
-	
-cas_catalog					.equ 0xbc9b
-cas_in_close					.equ 0xbc7a
-cas_in_open					.equ 0xbc77
-cas_out_close					.equ 0xbc8f
-cas_out_open					.equ 0xbc8c
-cas_in_char					.equ 0xbc80
-cas_test_eof					.equ 0xbc89
-cas_out_open					.equ 0xbc8c
-cas_out_close					.equ 0xbc8f
-cas_out_char					.equ 0xbc95
-cas_out_direct					.equ 0xbc98
-cas_in_abandon					.equ 0xbc7d
-cas_out_abandon				.equ 0xbc92
-
-hi_kl_curr_selection 			.equ 0xb912
-mc_start_program		   		.equ 0xbd16
+			.include "ff.i"	
+			.include "firmware.i"
+			.include "m4cmds.i"
 
 rom_response					.equ	0xD500
 rom_config					.equ 0xE000
 sock_status					.equ	0xFE00
-
-FA_READ 						.equ	1
-FA_WRITE						.equ	2
-FA_CREATE_ALWAYS				.equ 8
-
-C_OPEN						.equ 0x4301
-C_READ						.equ 0x4302
-C_WRITE						.equ 0x4303
-C_CLOSE						.equ 0x4304
-C_SEEK						.equ 0x4305
-C_READDIR						.equ	0x4306
-C_EOF						.equ	0x4307
-C_CD							.equ 0x4308
-C_FREE  						.equ 0x4309
-C_FTELL						.equ 0x430A
-C_READSECTOR					.equ 0x430B
-C_WRITESECTOR					.equ 0x430C
-C_FORMATTRACK					.equ 0x430D
-C_ERASEFILE					.equ 0x430E
-C_RENAME						.equ	0x430F
-C_MAKEDIR						.equ	0x4310
-C_FSIZE						.equ	0x4311
-C_READ2						.equ 0x4312
-C_GETPATH						.equ 0x4313
-C_SDREAD						.equ 0x4314
-C_SDWRITE						.equ 0x4315
-C_FSTAT						.equ 0x4316	
-C_HTTPGET						.equ 0x4320
-C_SETNETWORK					.equ 0x4321
-C_M4OFF						.equ	0x4322
-C_NETSTAT						.equ	0x4323
-C_TIME						.equ	0x4324
-C_DIRSETARGS					.equ	0x4325
-C_VERSION						.equ	0x4326
-C_UPGRADE						.equ	0x4327
-C_HTTPGETMEM					.equ	0x4328
-C_COPYBUF						.equ	0x4329
-C_COPYFILE					.equ	0x432A
-C_ROMSUPDATE					.equ	0x432B
-C_NETSOCKET					.equ 0x4331
-C_NETCONNECT					.equ 0x4332
-C_NETCLOSE					.equ 0x4333
-C_NETSEND						.equ 0x4334
-C_NETRECV						.equ 0x4335
-C_NETHOSTIP					.equ 0x4336
-C_NETRSSI						.equ 0x4337
-C_NETBIND						.equ 0x4338
-C_NETLISTEN					.equ 0x4339
-C_NETACCEPT					.equ 0x433A
-C_GETNETWORK					.equ 0x433B
-C_CONFIG						.equ 0x43FE
 UDIR_RAM_Address 				.equ 0xBEA3
 
 DATAPORT						.equ 0xFE00
@@ -125,7 +60,6 @@ ACKPORT						.equ 0xFC00
 			jp	UDIR
 			jp	GETPATH
 			jp	LongName
-			
 			.org 0xC072
   			jp	init_plus
 rsx_commands:
@@ -180,25 +114,6 @@ get_iy_workspace:
 
 init_rom:		push de
 			push hl
-			;ld	hl,#8
-			;add	hl,sp
-			push	af
-		
-			;ld	a,(hl)
-			;cp	#0x2e
-			;jr	z,ok464
-			;cp	#0x2b
-			;jr	nz,nosign
-;ok464:
-			;inc hl
-			;ld a,(hl)
-			;cp #3
-			
-			;ld	a,(rom_config+10)
-			;cp	#2
-			;call nz,boot_message
-nosign:
-			pop	af
 			cp	#0			; normally a is 0, but if called by m4 bootrom a == rom number
 			call z, #hi_kl_curr_selection
 		
@@ -210,28 +125,17 @@ nosign:
 			pop	hl
 			ld	de, #fio_jvec
 init_cont:			
-			ld	(iy),#9			; config size+3 (to increase)
+			ld	(iy),#10			; config size+3 (to increase)
 			ld	1(iy),#C_CONFIG
 			ld	2(iy),#C_CONFIG>>8
 			ld	3(iy),#0			; config offset (0..251)
-			ld	4(iy),l			; amsdos header ptr l
-			ld	5(iy),h			; amsdos header ptr h
-			ld	6(iy),e			; patch jump vector l
-			ld	7(iy),d			; patch jump vector h
-			ld	8(iy),a			; current rom
-			ld	9(iy),#1			; only show boot message at cold boot (value here == 0)
-			
+			ld	4(iy),l			; 00 amsdos header ptr l
+			ld	5(iy),h			; 01 amsdos header ptr h
+			ld	6(iy),e			; 02 patch jump vector l
+			ld	7(iy),d			; 03 patch jump vector h
+			ld	8(iy),a			; 04 current rom
+			ld	9(iy),#0			; 05 init count.
 			call	send_command_iy
-			
-			ld	(iy),#4
-			ld	1(iy),#C_CONFIG
-			ld	2(iy),#C_CONFIG>>8
-			ld	3(iy),#10			; config offset (0..251)
-			ld	4(iy),#0
-			ld	5(iy),#0
-			call	send_command_iy
-			
-			
 			call	patch_fio
 			pop	hl
 			pop	de
@@ -239,27 +143,12 @@ init_cont:
 			scf
 			ret
 			
-init_plus:	ld	hl,#plus_packet
-			call	send_command
-			
-			ld	hl,#0
-			.db 0xc3,0x16, 0xbd
-			; set config offset 8 to +, to indicate it is a CPC+ 
-plus_packet:	.db	0xA,#C_CONFIG,#C_CONFIG>>8,0,0,0,0,0,0,1,'+'
-
-;boot_message:
-;			ld	a,(#rom_config+6)
-;			cp	#'+'	
-;			jr	nz,not_plus
-;			ld	a,(#rom_config+5)
-;			cp	#1
-;			ret	nz
-;not_plus:			
-;			ret	
+init_plus:	ld	hl,#0
+			jp	0xBD16
 
 init_msg:
 			.ascii " M4 Board V2.0"
-			.db 10, 13, 10, 13, 0x0
+			.db 10, 13, 10, 13, 0
 
 			; ------------------------- strlen
 			; -- parameters:
@@ -350,9 +239,8 @@ skip_space:
 
 upper_case:
 			cp	#'a'
-			jr	nc,ge_a
-			
-ge_a:		cp	#'z'
+			ret	c
+			cp	#'z'+1
 			ret	nc
 			and	#0xDF
 			ret
@@ -479,11 +367,49 @@ _cas_in_open:
 			call	fopen
 			cp	#0xFF
 			jr	nz, open_ok
+			ld	a,b
+			cp	#0x92	; file not found? set Z flag.
+			jr	nz,other_open_error
+			
+			pop	bc	; len
+			pop	de
+			pop	hl	; filename
+			
+			push	hl
+			push	de
+			push	bc
+			push	af
+			call	get_iy_workspace
+			push	iy
+			pop	de		; dest
+			call strcpy83	; hl = filename, de =workspace, b = len
+			ld	hl,#8
+			add	hl,de	; +12
+			ld	e,l
+			ld	d,h
+			push	hl
+			inc	de
+			ldi
+			ldi
+			ldi
+			pop	hl
+			ld	a,#'.'
+			ld	(hl),a
+			; de = workspace
+			ld	hl,#text_not_found
+			ld	bc,#13
+			ldir
+			push	iy
+			pop	hl
+			call	disp_msg
+			pop	af
+other_open_error:
 			pop	bc
 			pop	de
 			pop	hl
 			pop	iy
-			or	a					; clear carry
+			scf
+			ccf
 			ret
 open_ok:
 
@@ -766,7 +692,7 @@ _cas_return:
 			push	de
 			push	bc
 			push	af
-			ld	hl,#C_FTELL
+			ld	hl,#ftell_cmd
 			call	send_command
 			ld	hl,(#rom_response+3)
 			dec	hl
@@ -1016,8 +942,8 @@ patch_fio:
 			; -- B = filename length
 			; -- A = mode
 			; -- return:
-			; -- A = file fd
-
+			; -- A = file fd (255 if error!)
+			; -- B = error code
 fopen:
 			push	bc
 			push	de
@@ -1069,12 +995,23 @@ filename_not_screen:
 			pop	de
 			pop	bc
 			ret
-fd_not_ok:
-			ld	a,#0xFF
+fd_not_ok:	
+			; translate the error
+			cp	#255
+			jr	z, skip_err_lookup
+			ld	e,a
+			ld	d,#0
+			ld	hl,#ff_error_map
+			add	hl,de
+			ld	a,(hl)
+skip_err_lookup:
 			pop	iy
 			pop	hl
 			pop	de
 			pop	bc
+			ld	b,a
+			ld	a,#255
+			or	a			; clear carry
 			ret
 
 			; ------------------------- fwrite
@@ -1208,10 +1145,10 @@ fread:
 			ld	(iy),#5				; packet size, cmd (2), fd (1), size (2)
 
 read_loop:
-			; get chunk size (<=0x200)
+			; get chunk size (<=0x800)
 			
 			push	hl
-			ld	bc,#-0x200
+			ld	bc,#-0x800
 			add	hl,bc				; and substract chunksize
 			jp	c, full_chunk
 			pop 	hl
@@ -1222,7 +1159,7 @@ read_loop:
 full_chunk:
 			pop	hl
 			ld	4(iy),#0x0			; chunk size low
-			ld	5(iy),#0x2			; chunk size high
+			ld	5(iy),#0x8			; chunk size high
 fread_cont:
 			ld	a,#0
 			cp	4(iy)
@@ -1307,17 +1244,17 @@ fclose:
 			cp	#255
 			jp	nz,fclose_ok
 			
-			ld	a,(rom_config+10)
+			ld	a,(rom_config+5)
 			cp	#2	
 			jp	z,past_autoexec
 			inc	a
 			ld	(iy),#4
 			ld	1(iy),#C_CONFIG
 			ld	2(iy),#C_CONFIG>>8
-			ld	3(iy),#10			; config offset (0..251)
+			ld	3(iy),#5			; config offset (0..251)
 			ld	4(iy),a	
 			call	send_command_iy
-			ld	a,(rom_config+10)
+			ld	a,(rom_config+5)
 			cp	#2
 			jp	nz, past_autoexec
 			xor	a
@@ -1340,7 +1277,29 @@ fclose:
 			cp	#0
 			jp	nz, past_autoexec
 			
+			; check if file size > 0 
 			
+			ld	1(iy),#C_FSIZE		
+			ld	2(iy),#C_FSIZE>>8
+			ld	3(iy),b			; fd
+			ld	(iy),#3
+			push	bc
+			call send_command_iy
+			pop	bc
+			ld	hl,(#rom_response+3)
+			xor	a
+			cp	h
+			jr	nz,autoexec_not0
+			cp	l
+			jr	nz,autoexec_not0
+			ld	1(iy),#C_CLOSE		; close cmd
+			ld	2(iy),#C_CLOSE>>8	; close cmd
+			ld	3(iy),b			; fd
+			ld	(iy),#3	; size - cmd(2) + fd(1)
+			call send_command_iy
+			jp	past_autoexec
+			
+autoexec_not0:			
 			; get header
 			ld	a,b
 			ld	de,(#rom_config)
@@ -1348,6 +1307,7 @@ fclose:
 			push	af
 			call	fread
 			pop	af
+			
 			; load addr 
 			call	get_iy_amsdos_header
 			ld	e,21(iy)
@@ -1474,11 +1434,6 @@ dir_no_args:
 			call	send_command_iy
 directory_cont:			
 			call	#0xBB69			; TXT GET WINDOW
-									; H holds the column number of the left edge, 
-									; D holds the column number of the right edge, 
-									; L holds the line number of the top edge, 
-									; E holds the line number of the bottom edge, 
-									; A is corrupt, Carry is false if the window covers the entire screen, and the other registers are always preserved
 			ld	a,d
 			inc	a
 			ld	c,#0
@@ -1556,11 +1511,10 @@ next_column1:
 			call	#0xbb5a
 			; check for ESC
 			call	check_esc_key
-			cp	#0xFC	; pressed twice ? ok leave...
+			;cp	#0xFC	; pressed twice ? ok leave...
+			BIT	2,A
 			jr	nz,dir_loop1
 			
-			ld	hl,#text_break
-			call	disp_msg
 			; exit
 			scf
 			sbc	a,a
@@ -1578,15 +1532,15 @@ esc_loop:		LD	A,#0x48
 			BIT	2,A
 			jr	z, esc_loop	; it is released
 	
-wait_key:		call	0xbb09
-			jr	nc, wait_key
-			cp	#0xFC
+wait_key:		LD	A,#0x48
+			call	key_scan
+			BIT	2,A
 			jr	z, esc_exit
-			cp	#32
+			LD	A,#0x45
+			call	key_scan
+			BIT	7,A			; is space?
 			jr	nz, wait_key
-			
-			;call	#0xBB03
-			;call	#0xBB18
+
 esc_exit:
 			pop	bc
 			ei
@@ -2313,7 +2267,7 @@ send_command:
 			ld	bc,#DATAPORT				; FE data out port
 			ld	d,(hl)						; size
 			inc	d
-sendloop:	inc	b
+sendloop:		inc	b
 			outi
 			dec	d
 			jr	nz, sendloop
@@ -3025,6 +2979,7 @@ romset_fail:
 			or	a
 			ret
 rom_update:
+			call	get_iy_workspace
 			ld	1(iy),#C_ROMSUPDATE
 			ld	2(iy),#C_ROMSUPDATE>>8
 			ld	(iy),#2			; packet size, cmd (2)
@@ -3050,8 +3005,6 @@ disp_hex:		ld	b,a
 			adc	a,#0x40
 			daa
 			jp	0xbb5a
-			
-
 
 ;---------------------------------------
 ; Helper functions
@@ -3420,9 +3373,15 @@ seek_cmd:
 eof_cmd:
 			.db 2
 			.dw	C_EOF
+
+ftell_cmd:
+			.db	3
+			.dw	C_FTELL
+			.db	1		; read fd
+
 debug_cmd:
 			.db 2			; size
-			.dw 0x43FF	; command C_sdir
+			.dw 0x43FF
 
 fail_msg:
 			.ascii "File not found or other error."
@@ -3452,11 +3411,35 @@ text_drive:
 			.db 10, 13
 			.ascii "Drive A:"
 			.db 0	; 10, 13, 10, 13, 0
-text_break:	.ascii "*Break*"
-			.db 10, 13, 0
+
 text_signal:	.ascii "Signal: 0x"
 			.db	0
-
+text_not_found:
+			.ascii " not found"
+			.db	10,13,0
+			
+ff_error_map:
+			.db 0x0	;FR_OK				0
+			.db 0xFF	;FR_DISK_ERR			1
+			.db 0xFF	;FR_INT_ERR			2
+			.db 0xFF	;FR_NOT_READY			3
+			.db 0x92	;FR_NO_FILE			4
+			.db 0x92	;FR_NO_PATH			5
+			.db 0x92	;FR_INVALID_NAME		6
+			.db 0xFF	;FR_DENIED			7
+			.db 0x91	;FR_EXIST				8	128+17 File already exists
+			.db 0xFF	;FR_INVALID_OBJECT		9
+			.db 0xFF	;FR_WRITE_PROTECTED		10
+			.db 0xFF	;FR_INVALID_DRIVE		11
+			.db 0xFF	;FR_NOT_ENABLED			12
+			.db 0xFF	;FR_NO_FILESYSTEM		13
+			.db 0xFF	;FR_MKFS_ABORTED		14
+			.db 0xFF	;FR_TIMEOUT			15
+			.db 0xFF	;FR_LOCKED				16
+			.db 0xFF	;FR_NOT_ENOUGH_CORE		17
+			.db 0xFF	;FR_TOO_MANY_OPEN_FILES	18
+			.db 0xFF	;FR_INVALID_PARAMETER	19
+			.db 0xE	; already open			20
 					
 .org rom_response
 			.ds	0xC00
