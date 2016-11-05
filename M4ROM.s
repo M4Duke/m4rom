@@ -10,8 +10,8 @@
 			.include "firmware.i"
 			.include "m4cmds.i"
 
-rom_response					.equ	0xD500
-rom_config					.equ 0xE000
+rom_response					.equ	0xD600
+rom_config					.equ rom_response+0xC00
 sock_status					.equ	0xFE00
 UDIR_RAM_Address 				.equ 0xBEA3
 
@@ -111,6 +111,23 @@ get_iy_workspace:
 			add	iy,bc
 			pop	bc
 			ret
+get_ix_workspace:
+			push	bc
+			ld	ix,(#rom_config)
+			ld	bc,#256
+			add	ix,bc
+			pop	bc
+			ret			
+; map+256
+cas_in_next_byte	.equ 0
+cas_in_eof		.equ	1
+cas_in_idx_l		.equ 2
+cas_in_idx_h		.equ 3
+cas_in_size_l 		.equ	4
+cas_in_size_h 		.equ	5
+cas_in_buf_l		.equ 6
+cas_in_buf_h		.equ 7
+cas_out_isdirect	.equ	8
 
 init_rom:		push de
 			push hl
@@ -118,7 +135,7 @@ init_rom:		push de
 			call z, #hi_kl_curr_selection
 		
 			pop	iy
-			ld	bc,#-260	
+			ld	bc,#-269
 			add	iy,bc
 			push	iy
 			push	iy
@@ -357,8 +374,8 @@ cas_hook_table:
 			; -- DE load address
 			; -- BC filesize (-header)
 			; -- A file type
-
-_cas_in_open:
+			
+_cas_in_open:	push	ix
 			push	iy
 			push	hl
 			push	de
@@ -408,12 +425,14 @@ other_open_error:
 			pop	de
 			pop	hl
 			pop	iy
+			pop	ix
 			scf
 			ccf
 			ret
 open_ok:
 
 			; read first 128 bytes and check if its using AMSDOS header
+			
 			call	get_iy_amsdos_header
 			push	iy
 			pop	de				; DE address =  ptr to amsdos header
@@ -421,7 +440,15 @@ open_ok:
 			ld	a,#1				; fd
 			call	fread
 			
-			; todo add error checking
+			call	get_ix_workspace
+			ld	cas_in_buf_l(ix),#0
+			ld	cas_in_buf_h(ix),#0
+			ld	cas_in_size_h(ix),#0			;	size
+			ld	cas_in_size_l(ix),#0			;	
+			ld	cas_in_idx_h(ix),#0			;	index
+			ld	cas_in_idx_l(ix),#0			; 
+			ld	cas_in_eof(ix),#0
+			ld	cas_in_next_byte(ix),#0			; next char for test eof
 			
 			; DE still amsdos header ptr
 			push	de
@@ -465,6 +492,9 @@ clear_loop:
 			pop	de	; 2k buffer or 0
 			ld	19(iy),e
 			ld	20(iy),d
+			;ld	cas_in_buf_l(ix),e
+			;ld	cas_in_buf_h(ix),d
+			
 			pop	hl	; filename
 			push	iy
 			pop	de
@@ -476,7 +506,9 @@ clear_loop:
 			;ld	de,#0;	x170			; load adr
 			ld	e,19(iy)
 			ld	d,20(iy)
-			
+			;ld	e,cas_in_buf_l(ix)
+			;ld	d,cas_in_buf_h(ix)
+		
 			ld	bc,#0			; size, should set ?
 			push	iy
 			pop	hl
@@ -484,12 +516,15 @@ clear_loop:
 			sbc	a,a	; clear z	
 			ld	a,#0x16	; x2
 			pop	iy
+			pop	ix
 			ret
 	
 checksum_ok:
 			pop	hl
 			pop	de	; b =filename len
 			pop	de	; 2k buffer or 0
+			ld	cas_in_buf_l(ix),e
+			ld	cas_in_buf_h(ix),d
 			pop	de	; filename
 
 			
@@ -510,10 +545,12 @@ checksum_ok:
 			ld	a,18(iy)
 			
 			pop	iy
+			pop	ix
 			ret
 open_fail:
 			pop	de
 			pop	iy
+			pop	ix
 			call	_cas_in_close
 			or	a	
 			
@@ -543,106 +580,144 @@ _cas_in_abandon:
 			sbc	a,a
 			ret
 ; ------------------------- cas_in_char replacment BC80 
+;C_SDEBUG .equ 0x43FF
+;debug:		push bc
+;			push af
+;			ld	bc,#DATAPORT				; data out port
+;			out (c),c
+;			ld	a,#C_SDEBUG
+;			out	(c),a						; command lo
+;			ld	a,#C_SDEBUG>>8
+;			out	(c),a						; command	hi
+;			pop	af
+;			out	(c),a	
+;			ld	bc,#ACKPORT
+;			out (c),c							
+;			pop bc
+;			ret			
 _cas_in_char:
 			push	hl
 			push	bc
 			push de
-			push	iy
-			ld	ix,(#rom_config)
-			call	get_iy_workspace
-			ld	l,-6(iy)			;	size
-			ld	h,-5(iy)			;	
-			ld	c,-4(iy)			;	index
-			ld	b,-3(iy)			; 
-			or	a
-			sbc	hl,bc
-			xor	a
-			cp	h
+			push	ix
+			call	get_ix_workspace
+			
+			ld	l,cas_in_size_h(ix)			;	size
+			ld	h,cas_in_size_l(ix)			;	
+			ld	c,cas_in_idx_h(ix)			;	index
+			ld	b,cas_in_idx_l(ix)			; 
+			
+			ld	e, cas_in_buf_l(ix)
+			ld	d, cas_in_buf_h(ix)
+			
+			; size == index ?
+			
+			ld	a,l
+			cp	c
 			jr	nz, no_buffer_fill
-			cp	l
+			ld	a,h
+			cp	b
 			jr	nz, no_buffer_fill
-			ld	a,-2(iy)			; EOF yet?
+			
+			; EOF flag set ?
+			ld	b,#0xF			; set hard EOF
+			ld	a,cas_in_eof(ix)			; EOF yet?
 			cp	#0
 			jp	nz, char_in_eof
 			
-			ld	(iy),#5			; packet size, cmd (2), fd (1), size (2)
-			ld	1(iy),#C_READ2
-			ld	2(iy),#C_READ2>>8
-			ld	3(iy),#1			; fd
-			ld	4(iy),#0			; 
-			ld	5(iy),#0x08		; size 2k
-			push	iy
-			pop	hl
-			call	send_command
-			
+			; re-fill buffer
+	
+			ld	bc,#DATAPORT				; data out port
+			out (c),c
+			ld	a,#C_READ2
+			out	(c),a						; command lo
+			ld	a,#C_READ2>>8
+			out	(c),a						; command	hi
+			ld	a,#1
+			out	(c),a						; output char
+			xor	a
+			out	(c),a	
+			ld	a,#8
+			out	(c),a	
+			ld	bc,#ACKPORT
+			out (c),c							; tell M4 that command has been send
+		
+			; check rom response
+				
 			ld	a,(#rom_response+3)
 			cp	#20				; eof ?
 			jr	nz, not_eof_yet
+			; Set EOF flag
+			
+			ld	a,#1
+			ld	cas_in_eof(ix),a			; this is end of file
+			; check if read size == 0
 			ld	hl,(#rom_response+4)	; read size
 			xor	a
 			cp	h
 			jr	nz, not_eof_yet
 			cp	l
 			jr	nz, not_eof_yet
-			ld	a,#1
-			ld	-2(iy),a			; this is end of file
+			ld	b,#0xF			; set hard end
 			jr	char_in_eof
 not_eof_yet:			
 			
 			ld	hl,(#rom_response+4)	; read size
-			ld	-6(iy),l			;	size
-			ld	-5(iy),h			;	
-			ld	-4(iy),#0			; index
-			ld	-3(iy),#0			; index
+			ld	cas_in_size_h(ix),l			; size
+			ld	cas_in_size_l(ix),h			;	
+			;ld	hl,(#rom_response+6)
+			ld	cas_in_idx_h(ix),#0			; index
+			ld	cas_in_idx_l(ix),#0			; index
 			ld	c,l
 			ld	b,h
-			ld	hl,#rom_response+6
+			ld	hl,#rom_response+8
 			
-			ld	e,19(ix)			; 2k buffer
-			ld	d,20(ix)
-			ldir
-no_buffer_fill:
-
-			; should add screen ram check
-			;ld	l,-6(iy)			;	size
-			;ld	h,-5(iy)			;	
-			
-			ld	l,19(ix)			; 2k buffer
-			ld	h,20(ix)
+			ld	e, cas_in_buf_l(ix)
+			ld	d, cas_in_buf_h(ix)
 		
-			ld	c,-4(iy)			;	index
-			ld	b,-3(iy)			; 
+			xor	a
+			cp	e
+			jr	nz, buf_is_set
+			cp	d
+			jr	z, no_buffer_fill
+buf_is_set:			
+			ldir
+			
+			
+no_buffer_fill:
+		
+			ld	hl,#rom_response+8
+		
+			ld	c,cas_in_idx_h(ix)			;	index
+			ld	b,cas_in_idx_l(ix)			; 
 			add	hl,bc
 			
-			inc	bc
-			ld	-4(iy),c			;	index
-			ld	-3(iy),b			; 
+			inc	bc	
+			ld	cas_in_idx_h(ix),c			;	index
+			ld	cas_in_idx_l(ix),b			; 
 			ld	b,(hl)
 			inc	hl
 			ld	a,(hl)
-			cp	#26
-			jr	nz,over_eof		;	char_in_eof		; soft EOF
-			ld	a,#1
-			ld	-2(iy),a			; this is end of file
-over_eof:		ld	a,b
-			cp	a,#26
-			jr	z,char_in_eof
-			or	a
-
-					; Z flag reset (false)
-			scf		; C flag set (true)
-			
-			;sbc	a	;false
-			pop	iy
+			ld	cas_in_next_byte(ix),a
+			ld	a,#26
+			cp	b
+			jr	z, char_in_eof
+			ld	a,b
+			or	a	; Z flag set (true) set Z flag
+			scf		; C flag set (true)     set C flag
+			ld	a,b
+			pop	ix
 			pop	de
 			pop	bc
 			pop	hl
 			ret
 
 
-char_in_eof:	or	a	; Z flag reset (false)
+char_in_eof:	
 			scf
-			ccf		; C flag reset (false)
+			ccf		; clear C flag (false)
+			sbc	a	; clear Z flag (false)
+			ld	a,b	; get either 0xF or 0x1A
 			pop	iy
 			pop	de
 			pop	bc
@@ -704,65 +779,94 @@ _cas_return:
 			pop	hl
 			ret
 ; ------------------------- cas_test_eof replacement BC89	
-_cas_test_eof:
-			push	iy
-			call	get_iy_workspace
-			ld	a,-2(iy)
-			pop	iy
-			cp	#0
-			jr	z, not_eof2
-			or	a	; Z flag reset (false)
-			scf
-			ccf		; C flag reset (false)
-			ret
-
-not_eof2:		;or a	; Z flag reset
-			scf	; C flag set
-			sbc	a,a ; Z flag set
+_cas_test_eof:	push	ix
+			push	af
+			call	get_ix_workspace
+			ld	a,cas_in_next_byte(ix)			; last char+1
+			cp	#0x1A
+			jr	z,is_eof
 			
-			ret
-
-			push	hl
-			push	de
-			push	bc
-			ld	hl,#eof_cmd
-			call	send_command
-			ld	a,(#rom_response+3)
+			; size == index ?
+			
+			ld	a,cas_in_size_h(ix)
+			cp	cas_in_idx_h(ix)
+			jr	nz, not_eof
+			ld	a,cas_in_size_l(ix)
+			cp	cas_in_idx_l(ix)
+			jr	nz, not_eof
+			
+			; EOF flag set ?
+			ld	a,cas_in_eof(ix)			; EOF yet?
 			cp	#0
 			jr	z, not_eof
-			pop	bc
-			pop	de
-			pop	hl
-			or	a	; z flag not set (false)
-			scf
-			ccf		; carry not set (false)
+is_eof:
+			pop	af
+			pop	ix
+			or	a	; z = 0
+			scf		
+			ccf		; c = 0
+			ret	
 			
-			ret
+not_eof:		
+			pop	af
+			pop	ix
+			or	a	; z = 0
+			scf		; c = 1
+			ret			
 			
-not_eof:		pop	bc
-			pop	de
-			pop	hl
-			push	iy
-			call	get_iy_workspace
-			
-			;or	a	; z flag not set (false)
-			scf
-			sbc	a,a
-			
-			ld	a,-1(iy)
-			pop	iy
-			ret
 ; ------------------------- cas_out_close replacement BC8F
 _cas_out_close:
+			push	iy
+			push	ix
+			call	get_iy_amsdos_header
+			call	get_ix_workspace
+			ld	a, cas_out_isdirect(ix)
+			cp	#0
+			jr	z,no_header
+			; refresh header
+			
+			ld	hl,#0
+			ld	a,#2
+			call fseek
+			
+			; calc checksum
+			ld	b,#66
+			ld	hl,#0
+			; 	de point to amsdos header
+			push	iy
+			pop	de
+calc_checksum_loop2:
+			push	bc
+			ld	a,(de)
+			ld	c,a
+			ld	b,#0
+			inc	de
+			add	hl,bc
+			pop	bc
+			djnz	calc_checksum_loop2
+			; save checksum
+			ld	67(iy), l
+			ld	68(iy), h
+			
+			push	iy
+			pop	de			; amsdos header
+			ld	hl,#128	; size
+			ld	a,#2			; fd
+			call	fwrite
+no_header:			
 			ld	a,#2
 			call	fclose
 			cp	#0
 			scf
 			jr	nz,close_out_fail
 			sbc	a,a
+			pop	ix
+			pop	iy
 			ret
 close_out_fail:
 			ccf	
+			pop	ix
+			pop	iy
 			ret
 
 ; ------------------------- cas_out_abandon replacement BC92
@@ -783,6 +887,7 @@ _cas_out_abandon:
 ; -- zero false
 
 _cas_out_open:
+			push ix
 			push	iy
 			push	bc
 			ld	a,#FA_WRITE | FA_CREATE_ALWAYS	; write mode
@@ -791,9 +896,11 @@ _cas_out_open:
 			jr	nz, open_w_ok
 			pop	bc
 			pop	iy
+			pop	ix
 			or	a			; clear carry
 			ret
-open_w_ok:
+open_w_ok:	call	get_ix_workspace
+			ld	cas_out_isdirect(ix),#0
 			; create	header
 			call	get_iy_amsdos_header
 			push	iy
@@ -811,35 +918,28 @@ clr_head:
 			ex	de,hl
 			dec	hl	; HL points to AMSDOS header
 			pop	iy
+			pop	ix
 			scf
 			sbc	a,a
 			ret
 ; ------------------------- cas_out_char  replacement	BC95
 ; -- parameters
 ; -- A = char
-; TODO
-; buffer stream and write on close.
 _cas_out_char:
 			push	bc
 			push	af
-			ld	bc,#DATAPORT				; data out port
-			ld	a,#4
-			out	(c),a						; size
-			ld	a,#C_WRITE
-			out	(c),a						; command lo
-			ld	a,#C_WRITE>>8
-			out	(c),a						; command	hi
-			ld	a,#2
-			out	(c),a						; fd
-			pop	af
-			out	(c),a						; output char
-			
-			; tell M4 that command has been send
-			ld	bc,#ACKPORT
+			ld	bc,#DATAPORT			; data out port
 			out (c),c
+			ld	a,#C_WRITE_COC
+			out	(c),a				; command lo
+			out	(c),a				; command	hi
+			pop	af
+			out	(c),a				; output char
+			ld	bc,#ACKPORT
+			out (c),c					; tell M4 that command has been send
 			pop	bc
-			scf
-			sbc	a,a
+			or	a					; z = 0
+			scf						; c = 1
 			ret
 
 
@@ -850,8 +950,11 @@ _cas_out_char:
 			; -- BC = execution address
 			; --  A = filetype
 _cas_out_direct:
+			push ix
 			push	iy
 			call	get_iy_amsdos_header
+			call get_ix_workspace
+			ld	cas_out_isdirect(ix),#1
 			; fill in header details
 			; HL load address
 			ld	21(iy),l
@@ -905,11 +1008,13 @@ calc_checksum_loop:
 			cp	#0
 			jr	nz, out_direct_error
 			pop	iy
+			pop	ix
 			scf
 			sbc	a,a
 			ret
 out_direct_error:
 			pop	iy
+			pop	ix
 			or	a
 			ret
 			
@@ -1511,10 +1616,10 @@ next_column1:
 			call	#0xbb5a
 			; check for ESC
 			call	check_esc_key
-			;cp	#0xFC	; pressed twice ? ok leave...
-			BIT	2,A
+			cp	#0xFC	; pressed twice ? ok leave...
 			jr	nz,dir_loop1
-			
+			ld	hl,#text_break
+			call	disp_msg
 			; exit
 			scf
 			sbc	a,a
@@ -1522,49 +1627,20 @@ next_column1:
 			
 check_esc_key:	di
 			push	bc
-			LD	A,#0x48
-			call	key_scan
-			BIT	2,A			; ESC 
-			jr	nz, esc_exit			
-
-esc_loop:		LD	A,#0x48
-			call	key_scan
-			BIT	2,A
-			jr	z, esc_loop	; it is released
-	
-wait_key:		LD	A,#0x48
-			call	key_scan
-			BIT	2,A
-			jr	z, esc_exit
-			LD	A,#0x45
-			call	key_scan
-			BIT	7,A			; is space?
-			jr	nz, wait_key
-
+			call	0xbb09
+			jr	nc, esc_exit			
+			cp	#0xFC
+			jr	nz, esc_exit
+			; wait for release
+esc_loop:		call	0xbb09
+			jr	c, esc_loop
+			
+			
+wait_key:		call	0xbb09
+			jr	nc,wait_key
 esc_exit:
 			pop	bc
 			ei
-			ret
-			
-			; taken from http://www.cpcwiki.eu/index.php/Programming:Keyboard_scanning, thanks !
-key_scan:		ld	d,#0
-			ld	bc,#0xf782	; ppi port a out /c out 
-			out	(c),c 
-			ld	bc,#0xf40e	; select ay reg 14 on ppi port a 
-			out	(c),c 
-			ld	bc,#0xf6c0	; this value is an ay index (r14) 
-			out	(c),c 
-			out	(c),d 		; validate!! out (c),0
-			ld	bc,#0xf792	; ppi port a in/c out 
-			out	(c),c 
-			dec	b 
-			out	(c),a 		; send kbdline on reg 14 ay through ppi port a
-			ld 	b,#0xf4		; read ppi port a 
-			in	a,(c)		; e.g. ay r14 (ay port a) 
-			ld	bc,#0xf782	; ppi port a out / c out 
-			out	(c),c 
-			dec	b			; reset ppi write 
-			out	(c),d		; out (c),0
 			ret
 
 ; ------------------------- HTTP GET - download file from http to current path
@@ -2397,7 +2473,7 @@ read_sector:
 disp_msg:		ld 	a, (hl)
 			or	a
 			ret	z
-			call #0xBB5A
+			call 0xBB5A
 			inc	hl
 			jr	disp_msg
 			
@@ -2411,7 +2487,7 @@ get_path:		call	#0xbb78	; get cursor pos
 			jr	nc,not_last_line
 			ld	c,#25	; no scrolling, please
 not_last_line:
-			call	#0xbb8a
+			call	0xbb8a
 inputloop:	
 			push	hl
 			call	#0xbd19
@@ -3417,7 +3493,9 @@ text_signal:	.ascii "Signal: 0x"
 text_not_found:
 			.ascii " not found"
 			.db	10,13,0
-			
+text_break:	.db	10,13
+			.ascii "*Break*"
+			.db	10,13,0
 ff_error_map:
 			.db 0x0	;FR_OK				0
 			.db 0xFF	;FR_DISK_ERR			1

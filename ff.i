@@ -26,4 +26,6 @@ FR_INVALID_PARAMETER	.equ 19
 
 FA_READ 						.equ	1
 FA_WRITE						.equ	2
+FA_CREATE_NEW					.equ 4
 FA_CREATE_ALWAYS				.equ 8
+FA_OPEN_ALWAYS					.equ 16

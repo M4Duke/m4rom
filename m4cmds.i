@@ -36,7 +36,8 @@ C_HTTPGETMEM					.equ	0x4328
 C_COPYBUF						.equ	0x4329
 C_COPYFILE					.equ	0x432A
 C_ROMSUPDATE					.equ	0x432B
-C_ROMLIST						.equ	0x432C
+;C_ROMLIST						.equ	0x432C
+
 C_NETSOCKET					.equ 0x4331
 C_NETCONNECT					.equ 0x4332
 C_NETCLOSE					.equ 0x4333
@@ -49,3 +50,5 @@ C_NETLISTEN					.equ 0x4339
 C_NETACCEPT					.equ 0x433A
 C_GETNETWORK					.equ 0x433B
 C_CONFIG						.equ 0x43FE
+
+C_WRITE_COC					.equ 0x4343
