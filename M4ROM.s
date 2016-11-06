@@ -609,9 +609,6 @@ _cas_in_char:
 			ld	c,cas_in_idx_h(ix)			;	index
 			ld	b,cas_in_idx_l(ix)			; 
 			
-			ld	e, cas_in_buf_l(ix)
-			ld	d, cas_in_buf_h(ix)
-			
 			; size == index ?
 			
 			ld	a,l
@@ -688,7 +685,9 @@ buf_is_set:
 			
 no_buffer_fill:
 		
-			ld	hl,#rom_response+8
+			;ld	hl,#rom_response+8
+			ld	l, cas_in_buf_l(ix)
+			ld	h, cas_in_buf_h(ix)
 		
 			ld	c,cas_in_idx_h(ix)			;	index
 			ld	b,cas_in_idx_l(ix)			; 
@@ -697,10 +696,12 @@ no_buffer_fill:
 			inc	bc	
 			ld	cas_in_idx_h(ix),c			;	index
 			ld	cas_in_idx_l(ix),b			; 
-			ld	b,(hl)
+			rst	#0x20
+			ld	b,a
 			inc	hl
-			ld	a,(hl)
+			rst	#0x20
 			ld	cas_in_next_byte(ix),a
+			
 			ld	a,#26
 			cp	b
 			jr	z, char_in_eof
@@ -780,12 +781,11 @@ _cas_return:
 			ret
 ; ------------------------- cas_test_eof replacement BC89	
 _cas_test_eof:	push	ix
-			push	af
 			call	get_ix_workspace
 			ld	a,cas_in_next_byte(ix)			; last char+1
 			cp	#0x1A
 			jr	z,is_eof
-			
+
 			; size == index ?
 			
 			ld	a,cas_in_size_h(ix)
@@ -799,17 +799,16 @@ _cas_test_eof:	push	ix
 			ld	a,cas_in_eof(ix)			; EOF yet?
 			cp	#0
 			jr	z, not_eof
-is_eof:
-			pop	af
-			pop	ix
+			ld	a,#0xF
+is_eof:		pop	ix
 			or	a	; z = 0
 			scf		
 			ccf		; c = 0
 			ret	
 			
 not_eof:		
-			pop	af
 			pop	ix
+			ld	a,#0x20
 			or	a	; z = 0
 			scf		; c = 1
 			ret			
@@ -919,8 +918,9 @@ clr_head:
 			dec	hl	; HL points to AMSDOS header
 			pop	iy
 			pop	ix
-			scf
-			sbc	a,a
+			ld	a,#0xff
+			or	a	; z = 0
+			scf		; c = 1
 			ret
 ; ------------------------- cas_out_char  replacement	BC95
 ; -- parameters
