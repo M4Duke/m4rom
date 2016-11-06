@@ -161,7 +161,7 @@ init_cont:
 			ret
 			
 init_plus:	ld	hl,#0
-			jp	0xBD16
+			jp	mc_start_program
 
 init_msg:
 			.ascii " M4 Board V2.0"
@@ -490,10 +490,10 @@ clear_loop:
 			; copy filename into "fake" header
 			pop	bc	; b = filename len
 			pop	de	; 2k buffer or 0
-			ld	19(iy),e
-			ld	20(iy),d
-			;ld	cas_in_buf_l(ix),e
-			;ld	cas_in_buf_h(ix),d
+			ld	21(iy),e
+			ld	22(iy),d
+			ld	cas_in_buf_l(ix),e
+			ld	cas_in_buf_h(ix),d
 			
 			pop	hl	; filename
 			push	iy
@@ -502,18 +502,20 @@ clear_loop:
 			call	strcpy83
 			ld	18(iy),#0x16; set as ascii?
 			ld	23(iy),#0xFF	; first block 0xFF
-			
+			ld	66(iy),#0x80
 			;ld	de,#0;	x170			; load adr
-			ld	e,19(iy)
-			ld	d,20(iy)
-			;ld	e,cas_in_buf_l(ix)
-			;ld	d,cas_in_buf_h(ix)
+			;ld	e,19(iy)
+			;ld	d,20(iy)
+			ld	e,cas_in_buf_l(ix)
+			ld	d,cas_in_buf_h(ix)
 		
 			ld	bc,#0			; size, should set ?
 			push	iy
 			pop	hl
-			scf	; set carry flag
-			sbc	a,a	; clear z	
+			
+			;or	a	; z = 0
+			scf		; c = 1
+			sbc	a,a
 			ld	a,#0x16	; x2
 			pop	iy
 			pop	ix
@@ -702,9 +704,8 @@ no_buffer_fill:
 			ld	a,#26
 			cp	b
 			jr	z, char_in_eof
-			ld	a,b
-			or	a	; Z flag set (true) set Z flag
-			scf		; C flag set (true)     set C flag
+			or	a	; z = 0
+			scf		; c = 1
 			ld	a,b
 			pop	ix
 			pop	de
@@ -713,12 +714,11 @@ no_buffer_fill:
 			ret
 
 
-char_in_eof:	
+char_in_eof:	or	a	; z = 0
 			scf
-			ccf		; clear C flag (false)
-			sbc	a	; clear Z flag (false)
+			ccf		; c = 0
 			ld	a,b	; get either 0xF or 0x1A
-			pop	iy
+			pop	ix
 			pop	de
 			pop	bc
 			pop	hl
@@ -1496,9 +1496,18 @@ _cas_catalog:
 			push	de
 			push	hl
 			push	iy
+		
+			
 			call	get_iy_workspace
 			ld	1(iy),#C_DIRSETARGS
 			ld	2(iy),#C_DIRSETARGS>>8
+			
+			; store workbuf and index (max 2k)
+			ld	120(iy),e
+			ld	121(iy),d
+			ld	122(iy),#0
+			ld	123(iy),#0
+			
 			call	dir_no_args
 			pop	iy
 			pop	hl
@@ -1510,6 +1519,11 @@ _cas_catalog:
 			ret	
 directory:
 			call	get_iy_workspace
+			; set no workbuf
+			ld	120(iy),#0
+			ld	121(iy),#0
+			
+			
 			ld	1(iy),#C_DIRSETARGS
 			ld	2(iy),#C_DIRSETARGS>>8
 			cp	#1
@@ -1538,7 +1552,7 @@ dir_no_args:
 			ld	3(iy),#0
 			call	send_command_iy
 directory_cont:			
-			call	#0xBB69			; TXT GET WINDOW
+			call	txt_get_window			; TXT GET WINDOW
 			ld	a,d
 			inc	a
 			ld	c,#0
@@ -1584,36 +1598,42 @@ dir_loop1:
 			jr	z,was_last_column1
 			; add extra cr/lf, if last dir entry wasn't printed in last column
 			ld	a,#13
-			call	#0xbb5a
+			call	txt_output
 			ld	a,#10
-			call	#0xbb5a
+			call	txt_output
 was_last_column1:	
 			ld	hl,#rom_response+3
 			call	disp_msg
 			scf
 			sbc	a,a
 			ret	
-sdir_cont1:
+sdir_cont1:	inc	hl
 			inc	hl
 			inc	hl
+			call	direntry_workbuf
+			ld	b,#17
+disp_name_loop:
+			ld	a,(hl)
 			inc	hl
-			call	disp_msg
+			call	txt_output
+			djnz	disp_name_loop
+			;call	disp_msg
 			pop	bc
 			inc	b
 			ld	a,b
 			cp	c
 			jr	nz,next_column1
 			ld	a,#13
-			call	#0xbb5a
+			call	txt_output
 			ld	a,#10
-			call	#0xbb5a
+			call	txt_output
 		
 			jr	dir_loop1
 next_column1:
 			ld	a,#32
-			call	#0xbb5a
-			call	#0xbb5a
-			call	#0xbb5a
+			call	txt_output
+			call	txt_output
+			call	txt_output
 			; check for ESC
 			call	check_esc_key
 			cp	#0xFC	; pressed twice ? ok leave...
@@ -1627,22 +1647,75 @@ next_column1:
 			
 check_esc_key:	di
 			push	bc
-			call	0xbb09
+			call	km_read_char
 			jr	nc, esc_exit			
 			cp	#0xFC
 			jr	nz, esc_exit
 			; wait for release
-esc_loop:		call	0xbb09
+esc_loop:		call	km_read_char
 			jr	c, esc_loop
 			
 			
-wait_key:		call	0xbb09
+wait_key:		call	km_read_char
 			jr	nc,wait_key
 esc_exit:
 			pop	bc
 			ei
 			ret
-
+direntry_workbuf:
+			push	hl
+			push	de
+			push	bc
+			xor	a
+			ld	e, 120(iy)
+			ld	d, 121(iy)
+			cp	d
+			jr	nz, dir_buf_is_set
+			cp	e
+			jr	z,no_dir_buf
+dir_buf_is_set:
+			ld	c, 122(iy); get index
+			ld	b, 123(iy)
+			
+			ld	a,#0xFC
+			cp	c		; end of buf? (14*146=0x7FC)
+			jr	nz, dir_buf_not_full
+			ld	a,#0x7
+			cp	b
+			jr	z,no_dir_buf
+dir_buf_not_full:
+			; de = workbuf
+			; hl = dir entry
+			ex	de,hl	
+			add	hl,bc	; workbuf + current entry 
+			ld	a,#0xFF	; mark 
+			ld	(hl),a
+			inc	hl
+			ex	de,hl	
+			ld	bc,#8	; copy first 8 bytes
+			ldir			; 1+8
+			inc	hl		; skip the dot
+			ld	bc,#3	; 1+8+3 = 12
+			ldir			; copy the extension
+			ld	bc,#6	; skip ascii file size + terminator
+			add	hl,bc
+			ldi			; copy file size in binary
+			ldi			; 1+8+3+2 = 14
+			xor	a
+			ld	(de),a	; set next entry to 0 if this was last
+			
+			ld	hl,#14	; increase index
+			ld	c, 122(iy); get index
+			ld	b, 123(iy)
+			add	hl,bc
+			ld	122(iy),l	; get index
+			ld	123(iy),h
+			
+			
+no_dir_buf:	pop	bc
+			pop	de
+			pop	hl
+			ret
 ; ------------------------- HTTP GET - download file from http to current path
 httpget:
 			call	get_iy_workspace
@@ -1778,7 +1851,7 @@ disp_mac_loop:
 			pop	hl
 			inc	hl
 			ld	a,#":"
-			call	#0xbb5a
+			call	txt_output
 			djnz	disp_mac_loop
 			ld	a,(hl)
 			call	disp_hex
@@ -1793,7 +1866,7 @@ disp_ip_loop:
 			pop	hl
 			inc	hl
 			ld	a,#0x2e
-			call	#0xbb5a
+			call	txt_output
 			djnz	disp_ip_loop
 			; last digit
 			call	dispdec
@@ -2292,7 +2365,7 @@ change_dir:
 			call	get_iy_workspace
 			cp	#0
 			jr	nz,cd_has_args
-			call	#0xBB69			; TXT GET WINDOW ( D = max column )
+			call	txt_get_window			; TXT GET WINDOW ( D = max column )
 			ld	(iy),#0		; offset 0 = init
 			inc	d
 			ld	1(iy),d		; offset 1 = max column
@@ -2473,13 +2546,13 @@ read_sector:
 disp_msg:		ld 	a, (hl)
 			or	a
 			ret	z
-			call 0xBB5A
+			call txt_output
 			inc	hl
 			jr	disp_msg
 			
 			; cursor copy function for basic 1.0, may remove later if space needed now you can replace lowerrom and use basic 1.1
 			
-get_path:		call	#0xbb78	; get cursor pos
+get_path:		call	txt_get_cursor	; get cursor pos
 			push	hl	; real cursor pos
 			pop	bc
 			ld	a,#25
@@ -2487,11 +2560,11 @@ get_path:		call	#0xbb78	; get cursor pos
 			jr	nc,not_last_line
 			ld	c,#25	; no scrolling, please
 not_last_line:
-			call	0xbb8a
+			call	txt_place_cursor
 inputloop:	
 			push	hl
-			call	#0xbd19
-			call	#0xbb09
+			call	mc_wait_flyback
+			call	km_read_char
 			pop	hl
 			push	hl
 			cp	#0xF4
@@ -2549,7 +2622,7 @@ enterkey:
 			; remove copy cursor
 			pop	de
 			push	hl
-			call	#0xbb8d
+			call	txt_remove_cursor
 			pop	hl
 			ld	a,h
 			cp	b
@@ -2559,14 +2632,14 @@ enterkey:
 			jr	z,same_pos
 not_same_pos:	ld	h,b
 			ld	l,c
-			call	#0xbb75
-			call	#0xbb8d	;remove real cursor
+			call	txt_set_cursor
+			call	txt_remove_cursor	;remove real cursor
 
 same_pos:
 			ld	a,#10
-			call	#0xbb5a
+			call	txt_output
 			ld	a,#13
-			call	#0xbb5a
+			call	txt_output
 			ret
 
 cursor_up:	push	af
@@ -2602,19 +2675,19 @@ update_cursor:
 			push	hl
 			ld	a,(iy)		; do not remove real cursor if same pos as copy cursor (first run)
 			cp	#1
-			call	z, #0xbb8d
+			call	z, txt_remove_cursor
 			ld	(iy),#1
 	
-			call	#0xbb75	; set cursor
-			call	#0xbb8a
+			call	txt_set_cursor	; set cursor
+			call	txt_place_cursor
 			pop	hl
 			ret
 
 copy_char:	push	af
 			push	hl	; copy cursor position
 	
-			call	#0xbb8d	; remove copy cursor
-			call	#0xbb60	; read char current cursor pos
+			call	txt_remove_cursor	; remove copy cursor
+			call	txt_rd_char	; read char current cursor pos
 			push	af
 	
 			ld	a,2(iy)	; filename len (pos)
@@ -2635,25 +2708,25 @@ fndir_max:
 			; set real cursor pos
 			ld	h,b
 			ld	l,c
-			call	#0xbb75
-			call	#0xbb8d	; remove cursor
+			call	txt_set_cursor
+			call	txt_remove_cursor	; remove cursor
 			pop	af
 			push	bc
-			call	#0xbb5d	; print 'copy' char
+			call	txt_wr_char	; print 'copy' char
 			pop	bc
 			; set new real cursor position
 			inc	b
 			ld	h,b
 			ld	l,c
-			call	#0xbb75	
-			call	#0xbb8a	; place cursor
+			call	txt_set_cursor	
+			call	txt_place_cursor	; place cursor
 	
 			pop	hl
 			; set back to copy cursor pos
 			inc	h	; new pos
 			push	hl
-			call	#0xbb75	; 
-			call	#0xbb8a	; place cursor
+			call	txt_set_cursor	; 
+			call	txt_place_cursor	; place cursor
 			pop	hl
 			
 			pop	af
@@ -2664,8 +2737,8 @@ key_press:
 			; set real cursor pos
 			ld	h,b
 			ld	l,c
-			call	#0xbb75
-			call	#0xbb8d	; remove cursor
+			call	txt_set_cursor
+			call	txt_remove_cursor	; remove cursor
 			
 	
 			
@@ -2685,18 +2758,18 @@ key_press:
 
 fndir_max1:	pop	af
 
-			call	#0xbb5a	; print char
+			call	txt_output	; print char
 			; set new real cursor position
 			inc	b
 			ld	h,b
 			ld	l,c
-			call	#0xbb75	
-			call	#0xbb8a	; place cursor
+			call	txt_set_cursor	
+			call	txt_place_cursor	; place cursor
 	
 			pop	hl
 			; set back to copy cursor pos
 			push	hl
-			call	#0xbb75
+			call	txt_set_cursor
 			pop	hl
 			ret
 
@@ -2706,15 +2779,15 @@ del_char:		push	af
 			; set real cursor pos
 			ld	h,b
 			ld	l,c
-			call	#0xbb75
-			call	#0xbb8d	; remove cursor
+			call	txt_set_cursor
+			call	txt_remove_cursor	; remove cursor
 			ld	a,b
 			cp	#1
 			jr	z,at_start_pos
 			dec	b
 			ld	h,b
 			ld	l,c
-			call	#0xbb75	; update real cursor pos
+			call	txt_set_cursor	; update real cursor pos
 			
 			ld	a,2(iy)	; filename len (pos)
 			cp	#0
@@ -2724,16 +2797,16 @@ del_char:		push	af
 			
 at_start_pos:
 			ld	a,#32
-			call	#0xbb5a	; overwrite the char with a space
+			call	txt_output	; overwrite the char with a space
 			; set cursor back
 			ld	h,b
 			ld	l,c
-			call	#0xbb75	; update real cursor pos
-			call	#0xbb8a
+			call	txt_set_cursor	; update real cursor pos
+			call	txt_place_cursor
 			pop	hl
 			; set back to copy cursor pos
 			push	hl
-			call	#0xbb75	
+			call	txt_set_cursor	
 			pop	hl
 	
 			pop	af
@@ -3073,14 +3146,14 @@ disp_hex:		ld	b,a
 			daa
 			adc	a,#0x40
 			daa
-			call	#0xbb5a
+			call	txt_output
 			ld	a,b
 			and	#0x0f
 			add	a,#0x90
 			daa
 			adc	a,#0x40
 			daa
-			jp	0xbb5a
+			jp	txt_output
 
 ;---------------------------------------
 ; Helper functions
@@ -3303,7 +3376,7 @@ PrintPath:
 			cp #0
 			jr z,finished_GETPATH
 			inc hl
-			call 0xbb5a
+			call txt_output
 			jr PrintPath
 finished_GETPATH:
 
@@ -3381,7 +3454,7 @@ PrintFileDirLongname:
 			cp #0
 			jr z,LongNameExit
 			inc hl
-			call 0xbb5a
+			call txt_output
 			jr PrintFileDirLongname
 
 ; --- EOF added by SOS
@@ -3394,15 +3467,15 @@ dispdec:		ld	e,#0
 			cp	#'0'
 			jr	nz,notlead0
 			ld	e,#1
-notlead0:		call	nz,0xBB5A
+notlead0:		call	nz,txt_output
 			ld	c,#-10
 			call	Num1
 			cp	#'0'
 			jr	z, lead0_2
-			call	0xBB5A
+			call	txt_output
 lead0_2_cont:	ld	c,b
 			call	Num1
-			jp	0xBB5A
+			jp	txt_output
 			
 Num1:		ld	a,#'0'-1
 Num2:		inc	a
@@ -3415,15 +3488,15 @@ lead0_2:
 			xor	a
 			cp	e
 			ld	a,d
-			call	z,0xBB5A
+			call	z,txt_output
 			jr	lead0_2_cont
 						
 			
 
 crlf:		ld	a,#10
-			call	0xbb5a
+			call	txt_output
 			ld	a,#13
-			jp	0xbb5a	
+			jp	txt_output	
 					
 data_0:		.db	0,1		
 romslots_fn:

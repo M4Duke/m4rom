@@ -16,5 +16,19 @@ cas_out_direct					.equ 0xbc98
 cas_in_abandon					.equ 0xbc7d
 cas_out_abandon				.equ 0xbc92
 
-hi_kl_curr_selection 			.equ 0xb912
+txt_output					.equ	0xbb5a
+txt_wr_char					.equ 0xbb5d
+txt_rd_char					.equ 0xbb60
+txt_get_window					.equ 0xbb69
+txt_set_cursor					.equ	0xbb75
+txt_get_cursor					.equ	0xbb78
+txt_place_cursor				.equ	0xbb8a
+txt_remove_cursor				.equ	0xbb8d
+
+km_read_char					.equ 0xbb09
+
 mc_start_program		   		.equ 0xbd16
+mc_wait_flyback				.equ 0xbd19
+
+
+hi_kl_curr_selection 			.equ 0xb912
