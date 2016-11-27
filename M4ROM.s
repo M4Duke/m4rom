@@ -2550,6 +2550,7 @@ read_sector:
 ; -- C  = sector number
 write_sector:
 			push	hl
+			push	bc
 			ld	bc,#DATAPORT
 			out	(c),c
 			ld	a,#C_WRITESECTOR
