@@ -47,7 +47,7 @@ ACKPORT						.equ 0xFC00
 			jp	temp			; 0x82	Drive speed
 			jp	temp			; 0x83	Disc type
 			jp	read_sector	; 0x84	Read sector
-			jp	temp			; 0x85	Write sector
+			jp	write_sector	; 0x85	Write sector
 			jp	temp			; 0x86	Format track
 			jp	temp			; 0x87	Seek track
 			jp	temp			; 0x88	Test drive
@@ -100,34 +100,23 @@ rsx_commands:
 			.ascis "LONGNAME"
 			.db 0
 
-get_iy_amsdos_header:
-			ld	iy,(#rom_config)
-			ret
-			
-get_iy_workspace:
-			push	bc
-			ld	iy,(#rom_config)
-			ld	bc,#128	;70
-			add	iy,bc
-			pop	bc
-			ret
-get_ix_workspace:
-			push	bc
-			ld	ix,(#rom_config)
-			ld	bc,#256
-			add	ix,bc
-			pop	bc
-			ret			
-; map+256
-cas_in_next_byte	.equ 0
-cas_in_eof		.equ	1
-cas_in_idx_l		.equ 2
-cas_in_idx_h		.equ 3
-cas_in_size_l 		.equ	4
-cas_in_size_h 		.equ	5
-cas_in_buf_l		.equ 6
-cas_in_buf_h		.equ 7
-cas_out_isdirect	.equ	8
+; work space map
+; 000-073 : Amsdos openin header
+; 074-143 : Amsdos openout header
+; 144-271	: actual work buffer
+
+cas_out_isdirect	.equ	-5
+cas_buf_l			.equ -4
+cas_buf_h			.equ -3
+cas_idx_l			.equ -2
+cas_idx_h			.equ -1
+
+; user bytes in use
+cas_in_size_l 		.equ	0x21
+cas_in_size_h 		.equ	0x22
+cas_in_next_byte	.equ 0x23
+cas_in_eof		.equ	0x24
+
 
 init_rom:		push de
 			push hl
@@ -135,23 +124,36 @@ init_rom:		push de
 			call z, #hi_kl_curr_selection
 		
 			pop	iy
-			ld	bc,#-269
+			ld	bc,#-276			; 144+128+4
 			add	iy,bc
-			push	iy
+			push	iy				; workspace start
+		
 			push	iy
 			pop	hl
+			ld	bc,#5
+			add	hl,bc			; point to amsdos in header
+			
 			ld	de, #fio_jvec
 init_cont:			
-			ld	(iy),#10			; config size+3 (to increase)
+			ld	(iy),#10+3			; config size+3 (to increase)
 			ld	1(iy),#C_CONFIG
 			ld	2(iy),#C_CONFIG>>8
 			ld	3(iy),#0			; config offset (0..251)
-			ld	4(iy),l			; 00 amsdos header ptr l
-			ld	5(iy),h			; 01 amsdos header ptr h
+			ld	4(iy),l			; 00 amsdos in header l
+			ld	5(iy),h			; 01 amsdos in header  h
 			ld	6(iy),e			; 02 patch jump vector l
 			ld	7(iy),d			; 03 patch jump vector h
 			ld	8(iy),a			; 04 current rom
 			ld	9(iy),#0			; 05 init count.
+			ld	bc,#74
+			add	hl,bc			
+			ld	10(iy),l			; 06 amsdos out header l
+			ld	11(iy),h			; 07 amsdos out header h
+			ld	bc,#74-5
+			add	hl,bc			
+			ld	12(iy),l			; 08 regular workspace for rom l
+			ld	13(iy),h			; 09 regular workspace for rom h
+			
 			call	send_command_iy
 			call	patch_fio
 			pop	hl
@@ -190,13 +192,6 @@ term:
 			pop	bc
 			ret
 temp:
-			;push	iy
-			;call get_iy_workspace
-			;ld	0(iy),#2
-			;ld	1(iy),#0xFF
-			;ld	2(iy),#0x43
-			;call	send_command_iy
-			;pop	iy
 			scf
 			sbc	a,a
 			ret
@@ -375,8 +370,7 @@ cas_hook_table:
 			; -- BC filesize (-header)
 			; -- A file type
 			
-_cas_in_open:	push	ix
-			push	iy
+_cas_in_open:	push	iy
 			push	hl
 			push	de
 			push	bc
@@ -396,7 +390,7 @@ _cas_in_open:	push	ix
 			push	de
 			push	bc
 			push	af
-			call	get_iy_workspace
+			ld	iy,(#rom_workspace)
 			push	iy
 			pop	de		; dest
 			call strcpy83	; hl = filename, de =workspace, b = len
@@ -425,7 +419,6 @@ other_open_error:
 			pop	de
 			pop	hl
 			pop	iy
-			pop	ix
 			scf
 			ccf
 			ret
@@ -433,23 +426,14 @@ open_ok:
 
 			; read first 128 bytes and check if its using AMSDOS header
 			
-			call	get_iy_amsdos_header
+			ld	iy,(#amsdos_inheader)
 			push	iy
-			pop	de				; DE address =  ptr to amsdos header
-			ld	hl,#128			; size of header
-			ld	a,#1				; fd
+			pop	de					; DE address =  ptr to amsdos header
+			ld	hl,#69				; size of header
+			ld	a,#1					; fd
 			call	fread
 			
-			call	get_ix_workspace
-			ld	cas_in_buf_l(ix),#0
-			ld	cas_in_buf_h(ix),#0
-			ld	cas_in_size_h(ix),#0			;	size
-			ld	cas_in_size_l(ix),#0			;	
-			ld	cas_in_idx_h(ix),#0			;	index
-			ld	cas_in_idx_l(ix),#0			; 
-			ld	cas_in_eof(ix),#0
-			ld	cas_in_next_byte(ix),#0			; next char for test eof
-			
+				
 			; DE still amsdos header ptr
 			push	de
 			; check checksum
@@ -464,6 +448,18 @@ checksum_loop:
 			add	hl,bc
 			pop	bc
 			djnz	checksum_loop
+			
+			; clear internal vars
+			
+			ld	cas_in_size_l(iy),#0			;	
+			ld	cas_in_size_h(iy),#0			;	size
+			ld	cas_buf_l(iy),#0
+			ld	cas_buf_h(iy),#0
+			ld	cas_idx_h(iy),#0				;	index
+			ld	cas_idx_l(iy),#0				; 
+			ld	cas_in_eof(iy),#0
+			ld	cas_in_next_byte(iy),#0			; next char for test eof
+		
 			; compare with header checksum
 			ld	a,l
 			cp	67(iy)
@@ -478,10 +474,11 @@ checksum_mismatch:
 			ld	hl,#0
 			ld	a,#1
 			call	fseek
+			
 			; clear header
 			
 			pop	hl
-			ld	b,#128
+			ld	b,#69
 clear_loop:
 			ld	(hl),#0
 			inc	hl
@@ -492,8 +489,8 @@ clear_loop:
 			pop	de	; 2k buffer or 0
 			ld	21(iy),e
 			ld	22(iy),d
-			ld	cas_in_buf_l(ix),e
-			ld	cas_in_buf_h(ix),d
+			ld	cas_buf_l(iy),e
+			ld	cas_buf_h(iy),d
 			
 			pop	hl	; filename
 			push	iy
@@ -506,10 +503,18 @@ clear_loop:
 			;ld	de,#0;	x170			; load adr
 			;ld	e,19(iy)
 			;ld	d,20(iy)
-			ld	e,cas_in_buf_l(ix)
-			ld	d,cas_in_buf_h(ix)
-		
-			ld	bc,#0			; size, should set ?
+			ld	iy,(#rom_workspace)
+			ld	1(iy),#C_FSIZE		
+			ld	2(iy),#C_FSIZE>>8
+			ld	3(iy),#1			
+			ld	(iy),#3
+			call send_command_iy
+			ld	bc,(#rom_response+3)	; size
+			ld	iy,(#amsdos_inheader)
+			ld	29(iy),c
+			ld	30(iy),b
+			ld	e,cas_buf_l(iy)
+			ld	d,cas_buf_h(iy)
 			push	iy
 			pop	hl
 			
@@ -518,15 +523,18 @@ clear_loop:
 			sbc	a,a
 			ld	a,#0x16	; x2
 			pop	iy
-			pop	ix
 			ret
 	
-checksum_ok:
+checksum_ok:	
+			ld	hl,#128	; ignore rest of header (unused)
+			ld	a,#1
+			call	fseek
+		
 			pop	hl
 			pop	de	; b =filename len
 			pop	de	; 2k buffer or 0
-			ld	cas_in_buf_l(ix),e
-			ld	cas_in_buf_h(ix),d
+			ld	cas_buf_l(iy),e
+			ld	cas_buf_h(iy),d
 			pop	de	; filename
 
 			
@@ -547,12 +555,12 @@ checksum_ok:
 			ld	a,18(iy)
 			
 			pop	iy
-			pop	ix
+
 			ret
 open_fail:
 			pop	de
 			pop	iy
-			pop	ix
+
 			call	_cas_in_close
 			or	a	
 			
@@ -601,13 +609,13 @@ _cas_in_char:
 			push	hl
 			push	bc
 			push de
-			push	ix
-			call	get_ix_workspace
+			push	iy
+			ld	iy,(#amsdos_inheader)
 			
-			ld	l,cas_in_size_h(ix)			;	size
-			ld	h,cas_in_size_l(ix)			;	
-			ld	c,cas_in_idx_h(ix)			;	index
-			ld	b,cas_in_idx_l(ix)			; 
+			ld	l,cas_in_size_h(iy)			;	size
+			ld	h,cas_in_size_l(iy)			;	
+			ld	c,cas_idx_h(iy)			;	index
+			ld	b,cas_idx_l(iy)			; 
 			
 			; size == index ?
 			
@@ -620,7 +628,7 @@ _cas_in_char:
 			
 			; EOF flag set ?
 			ld	b,#0xF			; set hard EOF
-			ld	a,cas_in_eof(ix)			; EOF yet?
+			ld	a,cas_in_eof(iy)			; EOF yet?
 			cp	#0
 			jp	nz, char_in_eof
 			
@@ -649,7 +657,7 @@ _cas_in_char:
 			; Set EOF flag
 			
 			ld	a,#1
-			ld	cas_in_eof(ix),a			; this is end of file
+			ld	cas_in_eof(iy),a			; this is end of file
 			; check if read size == 0
 			ld	hl,(#rom_response+4)	; read size
 			xor	a
@@ -662,17 +670,17 @@ _cas_in_char:
 not_eof_yet:			
 			
 			ld	hl,(#rom_response+4)	; read size
-			ld	cas_in_size_h(ix),l			; size
-			ld	cas_in_size_l(ix),h			;	
+			ld	cas_in_size_h(iy),l			; size
+			ld	cas_in_size_l(iy),h			;	
 			;ld	hl,(#rom_response+6)
-			ld	cas_in_idx_h(ix),#0			; index
-			ld	cas_in_idx_l(ix),#0			; index
+			ld	cas_idx_h(iy),#0			; index
+			ld	cas_idx_l(iy),#0			; index
 			ld	c,l
 			ld	b,h
 			ld	hl,#rom_response+8
 			
-			ld	e, cas_in_buf_l(ix)
-			ld	d, cas_in_buf_h(ix)
+			ld	e, cas_buf_l(iy)
+			ld	d, cas_buf_h(iy)
 		
 			xor	a
 			cp	e
@@ -686,21 +694,21 @@ buf_is_set:
 no_buffer_fill:
 		
 			;ld	hl,#rom_response+8
-			ld	l, cas_in_buf_l(ix)
-			ld	h, cas_in_buf_h(ix)
+			ld	l, cas_buf_l(iy)
+			ld	h, cas_buf_h(iy)
 		
-			ld	c,cas_in_idx_h(ix)			;	index
-			ld	b,cas_in_idx_l(ix)			; 
+			ld	c,cas_idx_h(iy)			;	index
+			ld	b,cas_idx_l(iy)			; 
 			add	hl,bc
 			
 			inc	bc	
-			ld	cas_in_idx_h(ix),c			;	index
-			ld	cas_in_idx_l(ix),b			; 
+			ld	cas_idx_h(iy),c			;	index
+			ld	cas_idx_l(iy),b			; 
 			rst	#0x20
 			ld	b,a
 			inc	hl
 			rst	#0x20
-			ld	cas_in_next_byte(ix),a
+			ld	cas_in_next_byte(iy),a
 			
 			ld	a,#26
 			cp	b
@@ -708,7 +716,7 @@ no_buffer_fill:
 			or	a	; z = 0
 			scf		; c = 1
 			ld	a,b
-			pop	ix
+			pop	iy
 			pop	de
 			pop	bc
 			pop	hl
@@ -719,7 +727,7 @@ char_in_eof:	or	a	; z = 0
 			scf
 			ccf		; c = 0
 			ld	a,b	; get either 0xF or 0x1A
-			pop	ix
+			pop	iy
 			pop	de
 			pop	bc
 			pop	hl
@@ -734,7 +742,7 @@ char_in_eof:	or	a	; z = 0
 
 _cas_in_direct:
 			push iy
-			call	get_iy_amsdos_header
+			ld	iy,(#amsdos_inheader)
 			push	bc
 	
 			; A = fd
@@ -780,34 +788,34 @@ _cas_return:
 			pop	hl
 			ret
 ; ------------------------- cas_test_eof replacement BC89	
-_cas_test_eof:	push	ix
-			call	get_ix_workspace
-			ld	a,cas_in_next_byte(ix)			; last char+1
+_cas_test_eof:	push	iy
+			ld	iy,(#amsdos_inheader)
+			ld	a,cas_in_next_byte(iy)			; last char+1
 			cp	#0x1A
 			jr	z,is_eof
 
 			; size == index ?
 			
-			ld	a,cas_in_size_h(ix)
-			cp	cas_in_idx_h(ix)
+			ld	a,cas_in_size_h(iy)
+			cp	cas_idx_h(iy)
 			jr	nz, not_eof
-			ld	a,cas_in_size_l(ix)
-			cp	cas_in_idx_l(ix)
+			ld	a,cas_in_size_l(iy)
+			cp	cas_idx_l(iy)
 			jr	nz, not_eof
 			
 			; EOF flag set ?
-			ld	a,cas_in_eof(ix)			; EOF yet?
+			ld	a,cas_in_eof(iy)			; EOF yet?
 			cp	#0
 			jr	z, not_eof
 			ld	a,#0xF
-is_eof:		pop	ix
+is_eof:		pop	iy
 			or	a	; z = 0
 			scf		
 			ccf		; c = 0
 			ret	
 			
 not_eof:		
-			pop	ix
+			pop	iy
 			ld	a,#0x20
 			or	a	; z = 0
 			scf		; c = 1
@@ -816,11 +824,9 @@ not_eof:
 ; ------------------------- cas_out_close replacement BC8F
 _cas_out_close:
 			push	iy
-			push	ix
-			call	get_iy_amsdos_header
-			call	get_ix_workspace
-			ld	a, cas_out_isdirect(ix)
-			cp	#0
+			ld	iy,(#amsdos_outheader)
+			ld	a, cas_out_isdirect(iy)
+			cp	#1
 			jr	z,no_header
 			; refresh header
 			
@@ -832,8 +838,7 @@ _cas_out_close:
 			ld	b,#66
 			ld	hl,#0
 			; 	de point to amsdos header
-			push	iy
-			pop	de
+			ld	de,(#amsdos_outheader)
 calc_checksum_loop2:
 			push	bc
 			ld	a,(de)
@@ -859,12 +864,10 @@ no_header:
 			scf
 			jr	nz,close_out_fail
 			sbc	a,a
-			pop	ix
 			pop	iy
 			ret
 close_out_fail:
 			ccf	
-			pop	ix
 			pop	iy
 			ret
 
@@ -886,7 +889,6 @@ _cas_out_abandon:
 ; -- zero false
 
 _cas_out_open:
-			push ix
 			push	iy
 			push	bc
 			ld	a,#FA_WRITE | FA_CREATE_ALWAYS	; write mode
@@ -895,16 +897,15 @@ _cas_out_open:
 			jr	nz, open_w_ok
 			pop	bc
 			pop	iy
-			pop	ix
 			or	a			; clear carry
 			ret
-open_w_ok:	call	get_ix_workspace
-			ld	cas_out_isdirect(ix),#0
+open_w_ok:	ld	iy,(#amsdos_outheader)
+			
+			ld	cas_out_isdirect(iy),#1
 			; create	header
-			call	get_iy_amsdos_header
 			push	iy
 			pop	de
-			ld	b, #128
+			ld	b, #69
 clr_head:
 			ld	(iy),#0
 			inc	iy
@@ -917,8 +918,7 @@ clr_head:
 			ex	de,hl
 			dec	hl	; HL points to AMSDOS header
 			pop	iy
-			pop	ix
-			ld	a,#0xff
+				ld	a,#0xff
 			or	a	; z = 0
 			scf		; c = 1
 			ret
@@ -950,11 +950,9 @@ _cas_out_char:
 			; -- BC = execution address
 			; --  A = filetype
 _cas_out_direct:
-			push ix
 			push	iy
-			call	get_iy_amsdos_header
-			call get_ix_workspace
-			ld	cas_out_isdirect(ix),#1
+			ld	iy,(#amsdos_outheader)
+			ld	cas_out_isdirect(iy),#2
 			; fill in header details
 			; HL load address
 			ld	21(iy),l
@@ -1008,13 +1006,11 @@ calc_checksum_loop:
 			cp	#0
 			jr	nz, out_direct_error
 			pop	iy
-			pop	ix
 			scf
 			sbc	a,a
 			ret
 out_direct_error:
 			pop	iy
-			pop	ix
 			or	a
 			ret
 			
@@ -1022,7 +1018,7 @@ out_direct_error:
 patch_fio:
 				
 			
-			ld	hl,#config+2
+			ld	hl,#jump_vec
 			ld	de,#0xbca4	;	// overwrite cas check...
 			push	de
 			ldi
@@ -1054,7 +1050,7 @@ fopen:
 			push	de
 			push	hl
 			push	iy
-			call	get_iy_workspace
+			ld	iy,(#rom_workspace)
 			ld	1(iy),#C_OPEN
 			ld	2(iy),#C_OPEN>>8
 			ld	3(iy),a			; mode
@@ -1131,7 +1127,7 @@ fwrite:
 			push	hl
 			push	de
 			push	bc
-			call	get_iy_workspace
+			ld	iy,(#rom_workspace)
 			ld	c,a				; fd
 			
 write_loop:
@@ -1243,7 +1239,7 @@ fread:
 			push	de
 			push	bc
 			push	iy
-			call	get_iy_workspace
+			ld	iy,(#rom_workspace)
 			ld	1(iy),#C_READ
 			ld	2(iy),#C_READ>>8
 			ld	3(iy),a				; fd
@@ -1313,7 +1309,7 @@ fseek:
 			push	hl
 			push	de
 			
-			call	get_iy_workspace
+			ld	iy,(#rom_workspace)
 			ld	(iy),#7			; size.. cmd(2) + offset (4)
 			ld	1(iy),#C_SEEK		; cmd seek
 			ld	2(iy),#C_SEEK>>8	; cmd seek
@@ -1339,7 +1335,7 @@ fclose:
 			push	bc
 			push	hl
 			push	iy
-			call	get_iy_workspace
+			ld	iy,(#rom_workspace)
 			ld	1(iy),#C_CLOSE		; close cmd
 			ld	2(iy),#C_CLOSE>>8	; close cmd
 			ld	3(iy),a			; fd
@@ -1349,7 +1345,7 @@ fclose:
 			cp	#255
 			jp	nz,fclose_ok
 			
-			ld	a,(rom_config+5)
+			ld	a,(init_count)
 			cp	#2	
 			jp	z,past_autoexec
 			inc	a
@@ -1359,7 +1355,7 @@ fclose:
 			ld	3(iy),#5			; config offset (0..251)
 			ld	4(iy),a	
 			call	send_command_iy
-			ld	a,(rom_config+5)
+			ld	a,(init_count)
 			cp	#2
 			jp	nz, past_autoexec
 			xor	a
@@ -1407,21 +1403,25 @@ fclose:
 autoexec_not0:			
 			; get header
 			ld	a,b
-			ld	de,(#rom_config)
-			ld	hl, #128
+			ld	de,(#amsdos_inheader)
+			ld	hl, #69
 			push	af
 			call	fread
 			pop	af
+			ld	hl,#128	; ignore rest of header (unused)
+			push	af
+			call	fseek
+			pop	af
 			
 			; load addr 
-			call	get_iy_amsdos_header
+			ld	iy,(#amsdos_inheader)
 			ld	e,21(iy)
 			ld	d,22(iy)
 			; HL = file size
 			ld	l,24(iy)
 			ld	h,25(iy)
 	
-			call	get_iy_workspace
+			ld	iy,(#rom_workspace)
 			push	hl
 			push	af
 			call	fread
@@ -1498,7 +1498,7 @@ _cas_catalog:
 			push	iy
 		
 			
-			call	get_iy_workspace
+			ld	iy,(#rom_workspace)
 			ld	1(iy),#C_DIRSETARGS
 			ld	2(iy),#C_DIRSETARGS>>8
 			
@@ -1518,7 +1518,7 @@ _cas_catalog:
 			sbc	a,a
 			ret	
 directory:
-			call	get_iy_workspace
+			ld	iy,(#rom_workspace)
 			; set no workbuf
 			ld	120(iy),#0
 			ld	121(iy),#0
@@ -1718,7 +1718,7 @@ no_dir_buf:	pop	bc
 			ret
 ; ------------------------- HTTP GET - download file from http to current path
 httpget:
-			call	get_iy_workspace
+			ld	iy,(#rom_workspace)
 			; get string
 			ld	l,(ix)
 			ld	h,1(ix)
@@ -1749,7 +1749,7 @@ httpget:
 setnetwork:
 			cp	#1
 			jp	nz, bad_args
-			call	get_iy_workspace
+			ld	iy,(#rom_workspace)
 			; get string
 			ld	l,(ix)
 			ld	h,1(ix)
@@ -1776,7 +1776,7 @@ setnetwork:
 			
 ; ------------------------- get network status
 netstat:
-			call	get_iy_workspace
+			ld	iy,(#rom_workspace)
 			ld	(iy),#2
 			ld	1(iy),#C_NETSTAT
 			ld	2(iy),#C_NETSTAT>>8
@@ -1875,7 +1875,7 @@ disp_ip_loop:
 			
 ; ------------------------- get time and date
 gettime:
-			call	get_iy_workspace
+			ld	iy,(#rom_workspace)
 			ld	(iy),#2
 			ld	1(iy),#C_TIME
 			ld	2(iy),#C_TIME>>8
@@ -1888,7 +1888,7 @@ gettime:
 			ret
 ; ------------------------- get version
 version:
-			call	get_iy_workspace
+			ld	iy,(#rom_workspace)
 			ld	(iy),#2
 			ld	1(iy),#C_VERSION
 			ld	2(iy),#C_VERSION>>8
@@ -1901,7 +1901,7 @@ version:
 			ret
 ; ------------------------- get upgrades if available
 upgrade:
-			call	get_iy_workspace
+			ld	iy,(#rom_workspace)
 			ld	(iy),#2
 			ld	1(iy),#C_UPGRADE
 			ld	2(iy),#C_UPGRADE>>8
@@ -1916,7 +1916,7 @@ upgrade:
 httpgetmem:
 			cp	#3			; 2 arguments?
 			jp	nz, bad_args
-			call	get_iy_workspace
+			ld	iy,(#rom_workspace)
 			; command
 			ld	1(iy),#C_HTTPGETMEM
 			ld	2(iy),#C_HTTPGETMEM>>8
@@ -2020,7 +2020,7 @@ erase_file:
 			cp	#0
 			jp	z,bad_args
 			
-			call	get_iy_workspace
+			ld	iy,(#rom_workspace)
 			; get string
 			ld	l,(ix)
 			ld	h,1(ix)
@@ -2057,7 +2057,7 @@ erase_ok:	scf
 rename_file:
 			cp	#2			; 2 arguments?
 			jr	nz, bad_args
-			call	get_iy_workspace
+			ld	iy,(#rom_workspace)
 			ld	1(iy),#C_RENAME
 			ld	2(iy),#C_RENAME>>8
 			
@@ -2120,7 +2120,7 @@ bad_args:
 copy_file:
 			cp	#2			; 2 arguments?
 			jr	nz, bad_args
-			call	get_iy_workspace
+			ld	iy,(#rom_workspace)
 			ld	1(iy),#C_COPYFILE
 			ld	2(iy),#C_COPYFILE>>8
 			
@@ -2176,7 +2176,7 @@ copy_file:
 fcopy_file:
 			cp	#2			; 2 arguments?
 			jp	nz, fcp_error
-			call	get_iy_workspace
+			ld	iy,(#rom_workspace)
 			ld	1(iy),#C_OPEN
 			ld	2(iy),#C_OPEN>>8
 			
@@ -2326,7 +2326,7 @@ makedir:
 			cp	#0
 			jp	z,bad_args
 			
-			call	get_iy_workspace
+			ld	iy,(#rom_workspace)
 			; get string
 			ld	l,(ix)
 			ld	h,1(ix)
@@ -2362,7 +2362,7 @@ makedir_ok:
 			
 ; ------------------------- CD - Change directory on SD card
 change_dir:
-			call	get_iy_workspace
+			ld	iy,(#rom_workspace)
 			cp	#0
 			jr	nz,cd_has_args
 			call	txt_get_window			; TXT GET WINDOW ( D = max column )
@@ -2487,7 +2487,7 @@ sendloop2:
 
 m4off:		push	iy
 			push	hl
-			call	get_iy_workspace
+			ld	iy,(#rom_workspace)
 			ld	(iy), #0x2
 			ld	1(iy), #C_M4OFF
 			ld	2(iy), #C_M4OFF>>8
@@ -2524,10 +2524,10 @@ m4off:		push	iy
 read_sector:
 			push	iy
 			push	hl
-			call	get_iy_workspace
+			ld	iy,(#rom_workspace)
 			ld	(iy), #0x5
-			ld	1(iy), #0x0B
-			ld	2(iy), #0x43
+			ld	1(iy), #C_READSECTOR
+			ld	2(iy), #C_READSECTOR>>8
 			ld	3(iy), d			; track
 			ld	4(iy), c			; sector
 			ld	5(iy), e			; drive
@@ -2542,6 +2542,41 @@ read_sector:
 			scf
 			sbc	a,a
 			ret			
+; ------------------------- bios write sector replacement (cmd 0x85)
+; -- parameters
+; -- HL = src address of data 
+; -- E  = drive number
+; -- D  = track number
+; -- C  = sector number
+write_sector:
+			push	hl
+			ld	bc,#DATAPORT
+			out	(c),c
+			ld	a,#C_WRITESECTOR
+			out	(c),a						
+			ld	a, #C_WRITESECTOR>>8
+			out	(c),a						
+			out	(c),d			; track
+			pop	de
+			out	(c),e			; sector
+			out	(c),d			; drive
+			ld	de,#512
+sec_data_loop:
+			ld	a,(hl)			; rst &20 or add >= &c000 check later....
+			out	(c),a
+			inc	hl
+			dec	de
+			xor	a
+			cp	d
+			jr	nz,sec_data_loop
+			cp	e
+			jr	nz,sec_data_loop
+			ld	bc,#ACKPORT
+			out (c),c
+			pop	hl
+			scf
+			sbc	a,a
+			ret						
 			
 disp_msg:		ld 	a, (hl)
 			or	a
@@ -2829,7 +2864,7 @@ nomul16:
 rom_upload:
 			cp	#2			; 2 arguments?
 			jp	nz, bad_args
-			call	get_iy_workspace
+			ld	iy,(#rom_workspace)
 				
 			; get filename
 			
@@ -3076,7 +3111,7 @@ rom_update_slot:
 rom_set:
 			cp	#2			; 2 arguments?
 			jp	nz, bad_args
-			call	get_iy_workspace
+			ld	iy,(#rom_workspace)
 				
 			; get rom status
 			
@@ -3128,7 +3163,7 @@ romset_fail:
 			or	a
 			ret
 rom_update:
-			call	get_iy_workspace
+			ld	iy,(#rom_workspace)
 			ld	1(iy),#C_ROMSUPDATE
 			ld	2(iy),#C_ROMSUPDATE>>8
 			ld	(iy),#2			; packet size, cmd (2)
@@ -3197,7 +3232,7 @@ UDIR:		ld a,(#UDIR_RAM_Address)
 			ret z
 
 NextGetEntry:
-			call	get_iy_workspace
+			ld	iy,(#rom_workspace)
 			ld	(iy),#2
 			ld	1(iy),#C_READDIR
 			ld	2(iy),#C_READDIR>>8
@@ -3329,7 +3364,7 @@ GETPATH:
 GetPath2:	
 			push de		
 	
-			call	get_iy_workspace
+			ld	iy,(#rom_workspace)
 			ld	0(iy),#2
 			ld	1(iy),#C_GETPATH
 			ld	2(iy),#C_GETPATH>>8
@@ -3392,7 +3427,7 @@ LongName:
 			jp	z,bad_args
 			push af
 			push de
-			call	get_iy_workspace
+			ld	iy,(#rom_workspace)
 			; get string
 			ld	l,(ix)
 			ld	h,1(IX)
@@ -3593,13 +3628,17 @@ ff_error_map:
 			.db 0xE	; already open			20
 					
 .org rom_response
-			.ds	0xC00
-
-
+				.ds	0xC00
 
 .org	rom_config
-config:
-			.db	0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
+amsdos_inheader:	.dw	0
+jump_vec:			.dw	0
+rom_num:			.db	0
+init_count:		.db	0
+amsdos_outheader:	.dw	0
+rom_workspace:		.dw	0
+reserved:			.ds	(64-10)
+				
 .org	sock_status
 sock_info:	.ds	80	; 5 socket status structures (0 is used for gethostbyname*, 1-4 returned by socket function) of 16 bytes
 ; structure layout
