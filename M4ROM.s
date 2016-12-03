@@ -110,10 +110,11 @@ cas_buf_l			.equ -4
 cas_buf_h			.equ -3
 cas_idx_l			.equ -2
 cas_idx_h			.equ -1
+cas_size_l 		.equ	19	; data len
+cas_size_h 		.equ	20
 
 ; user bytes in use
-cas_in_size_l 		.equ	0x21
-cas_in_size_h 		.equ	0x22
+
 cas_in_next_byte	.equ 0x23
 cas_in_eof		.equ	0x24
 
@@ -158,7 +159,7 @@ init_cont:
 			call	patch_fio
 			pop	hl
 			pop	de
-			and a
+			and	a
 			scf
 			ret
 			
@@ -449,14 +450,11 @@ checksum_loop:
 			pop	bc
 			djnz	checksum_loop
 			
+			ld	cas_size_l(iy),#0			;	
+			ld	cas_size_h(iy),#0			;	size
 			; clear internal vars
 			
-			ld	cas_in_size_l(iy),#0			;	
-			ld	cas_in_size_h(iy),#0			;	size
-			ld	cas_buf_l(iy),#0
-			ld	cas_buf_h(iy),#0
-			ld	cas_idx_h(iy),#0				;	index
-			ld	cas_idx_l(iy),#0				; 
+			
 			ld	cas_in_eof(iy),#0
 			ld	cas_in_next_byte(iy),#0			; next char for test eof
 		
@@ -491,7 +489,8 @@ clear_loop:
 			ld	22(iy),d
 			ld	cas_buf_l(iy),e
 			ld	cas_buf_h(iy),d
-			
+			ld	cas_idx_l(iy),e
+			ld	cas_idx_h(iy),d
 			pop	hl	; filename
 			push	iy
 			pop	de
@@ -535,6 +534,9 @@ checksum_ok:
 			pop	de	; 2k buffer or 0
 			ld	cas_buf_l(iy),e
 			ld	cas_buf_h(iy),d
+			ld	cas_idx_l(iy),e
+			ld	cas_idx_h(iy),d
+		
 			pop	de	; filename
 
 			
@@ -589,7 +591,7 @@ _cas_in_abandon:
 			scf
 			sbc	a,a
 			ret
-; ------------------------- cas_in_char replacment BC80 
+
 ;C_SDEBUG .equ 0x43FF
 ;debug:		push bc
 ;			push af
@@ -605,6 +607,7 @@ _cas_in_abandon:
 ;			out (c),c							
 ;			pop bc
 ;			ret			
+; ------------------------- cas_in_char replacment BC80 
 _cas_in_char:
 			push	hl
 			push	bc
@@ -612,18 +615,14 @@ _cas_in_char:
 			push	iy
 			ld	iy,(#amsdos_inheader)
 			
-			ld	l,cas_in_size_h(iy)			;	size
-			ld	h,cas_in_size_l(iy)			;	
-			ld	c,cas_idx_h(iy)			;	index
-			ld	b,cas_idx_l(iy)			; 
+			; size > 0
 			
-			; size == index ?
-			
-			ld	a,l
-			cp	c
+			ld	e,cas_size_l(iy)			;	size
+			ld	d,cas_size_h(iy)			;	
+			xor	a
+			cp	e
 			jr	nz, no_buffer_fill
-			ld	a,h
-			cp	b
+			cp	d
 			jr	nz, no_buffer_fill
 			
 			; EOF flag set ?
@@ -670,18 +669,18 @@ _cas_in_char:
 not_eof_yet:			
 			
 			ld	hl,(#rom_response+4)	; read size
-			ld	cas_in_size_h(iy),l			; size
-			ld	cas_in_size_l(iy),h			;	
+			ld	cas_size_l(iy),l			; size
+			ld	cas_size_h(iy),h			;	
 			;ld	hl,(#rom_response+6)
-			ld	cas_idx_h(iy),#0			; index
-			ld	cas_idx_l(iy),#0			; index
 			ld	c,l
 			ld	b,h
 			ld	hl,#rom_response+8
 			
 			ld	e, cas_buf_l(iy)
 			ld	d, cas_buf_h(iy)
-		
+			ld	cas_idx_l(iy),e			; index
+			ld	cas_idx_h(iy),d			; index
+			
 			xor	a
 			cp	e
 			jr	nz, buf_is_set
@@ -694,20 +693,21 @@ buf_is_set:
 no_buffer_fill:
 		
 			;ld	hl,#rom_response+8
-			ld	l, cas_buf_l(iy)
-			ld	h, cas_buf_h(iy)
-		
-			ld	c,cas_idx_h(iy)			;	index
-			ld	b,cas_idx_l(iy)			; 
-			add	hl,bc
 			
-			inc	bc	
-			ld	cas_idx_h(iy),c			;	index
-			ld	cas_idx_l(iy),b			; 
+			ld	l,cas_idx_l(iy)			;	index
+			ld	h,cas_idx_h(iy)			; 
 			rst	#0x20
 			ld	b,a
 			inc	hl
+			ld	cas_idx_l(iy),l			;	index
+			ld	cas_idx_h(iy),h			; 
 			rst	#0x20
+			ld	l, cas_size_l(iy)			; size
+			ld	h, cas_size_h(iy)
+			dec	hl
+			ld	cas_size_l(iy),l			; size
+			ld	cas_size_h(iy),h			;	
+		
 			ld	cas_in_next_byte(iy),a
 			
 			ld	a,#26
@@ -788,19 +788,23 @@ _cas_return:
 			pop	hl
 			ret
 ; ------------------------- cas_test_eof replacement BC89	
-_cas_test_eof:	push	iy
+_cas_test_eof:	push	hl
+			push	de
+			push	iy
 			ld	iy,(#amsdos_inheader)
 			ld	a,cas_in_next_byte(iy)			; last char+1
 			cp	#0x1A
 			jr	z,is_eof
 
-			; size == index ?
+			ld	l,cas_size_l(iy)
+			ld	h,cas_size_h(iy)
+				
+			; size > 0 ?
 			
-			ld	a,cas_in_size_h(iy)
-			cp	cas_idx_h(iy)
+			xor	a
+			cp	cas_size_l(iy)
 			jr	nz, not_eof
-			ld	a,cas_in_size_l(iy)
-			cp	cas_idx_l(iy)
+			cp	cas_size_h(iy)
 			jr	nz, not_eof
 			
 			; EOF flag set ?
@@ -809,6 +813,8 @@ _cas_test_eof:	push	iy
 			jr	z, not_eof
 			ld	a,#0xF
 is_eof:		pop	iy
+			pop	de
+			pop	hl
 			or	a	; z = 0
 			scf		
 			ccf		; c = 0
@@ -855,9 +861,20 @@ calc_checksum_loop2:
 			push	iy
 			pop	de			; amsdos header
 			ld	hl,#128	; size
+			jr	do_cas_out_close
+no_header:	
+			; write out remaining buffer (if any)
+			ld	l, cas_idx_l(iy)
+			ld	h, cas_idx_h(iy)
+			ld	e, cas_buf_l(iy)			
+			ld	d, cas_buf_h(iy)		
+			or	a
+			push	de
+			sbc	hl,de		; size
+			pop	de			; addr
+do_cas_out_close:
 			ld	a,#2			; fd
 			call	fwrite
-no_header:			
 			ld	a,#2
 			call	fclose
 			cp	#0
@@ -890,18 +907,25 @@ _cas_out_abandon:
 
 _cas_out_open:
 			push	iy
-			push	bc
 			ld	a,#FA_WRITE | FA_CREATE_ALWAYS	; write mode
 			call	fopen
 			cp	#0xFF
 			jr	nz, open_w_ok
-			pop	bc
 			pop	iy
 			or	a			; clear carry
 			ret
-open_w_ok:	ld	iy,(#amsdos_outheader)
+open_w_ok:	push	bc
+			ld	iy,(#amsdos_outheader)
 			
 			ld	cas_out_isdirect(iy),#1
+			ld	cas_size_l(iy),#0			;	
+			ld	cas_size_h(iy),#0			; size
+			ld	cas_buf_l(iy),e			; 2k buffer
+			ld	cas_buf_h(iy),d			; 
+			ld	cas_idx_l(iy),e			; 
+			ld	cas_idx_h(iy),d			; index
+			
+			
 			; create	header
 			push	iy
 			pop	de
@@ -918,26 +942,52 @@ clr_head:
 			ex	de,hl
 			dec	hl	; HL points to AMSDOS header
 			pop	iy
-				ld	a,#0xff
+			ld	a,#0xff
 			or	a	; z = 0
 			scf		; c = 1
 			ret
 ; ------------------------- cas_out_char  replacement	BC95
 ; -- parameters
 ; -- A = char
-_cas_out_char:
+_cas_out_char:	push	iy
+			push	hl
+			push	de
 			push	bc
 			push	af
-			ld	bc,#DATAPORT			; data out port
-			out (c),c
-			ld	a,#C_WRITE_COC
-			out	(c),a				; command lo
-			out	(c),a				; command	hi
+			ld	iy,(#amsdos_outheader)
+			ld	c, cas_buf_l(iy)
+			ld	b, cas_buf_h(iy)
+			ld	l, cas_idx_l(iy)
+			ld	h, cas_idx_h(iy)
+			or	a
+			sbc	hl,bc			; index - buf = size
+			ld	a, cas_size_l(iy)
+			cp	l
+			jr	nz,no_writeback
+			ld	a, cas_size_h(iy)
+			cp	h
+			jr	nz,no_writeback
+			ld	e, cas_buf_l(iy)			
+			ld	d, cas_buf_h(iy)	
+			ld	cas_idx_l(iy),e
+			ld	cas_idx_h(iy),d
+			;ld	hl,#0x800		; size
+			ld	a,#2			; fd
+			call	fwrite
+			
+
+no_writeback:	ld	l, cas_idx_l(iy)			
+			ld	h, cas_idx_h(iy)		
 			pop	af
-			out	(c),a				; output char
-			ld	bc,#ACKPORT
-			out (c),c					; tell M4 that command has been send
+			ld	(hl),a
+			inc	hl
+			ld	cas_idx_l(iy), l
+			ld	cas_idx_h(iy), h
+		
 			pop	bc
+			pop	de
+			pop	hl
+			pop	iy
 			or	a					; z = 0
 			scf						; c = 1
 			ret
