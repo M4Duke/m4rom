@@ -10,7 +10,7 @@
 			.include "firmware.i"
 			.include "m4cmds.i"
 
-rom_response					.equ	0xD600
+rom_response					.equ	0xE000
 rom_config					.equ rom_response+0xC00
 sock_status					.equ	0xFE00
 UDIR_RAM_Address 				.equ 0xBEA3
@@ -56,7 +56,7 @@ ACKPORT						.equ 0xFC00
 			jp	rom_set		; |ROMSET
 			jp	rom_update	; |ROMUPD
 			jp	fcopy_file	; |FCP
-			jp 	directory		; |DIR
+			jp 	ls			; |ls
 			jp	UDIR
 			jp	GETPATH
 			jp	LongName
@@ -94,7 +94,7 @@ rsx_commands:
 			.ascis "ROMSET"
 			.ascis "ROMUPD"
 			.ascis "FCP"
-			.ascis "SDIR"
+			.ascis "LS"
 			.ascis "UDIR"
 			.ascis "GETPATH"
 			.ascis "LONGNAME"
@@ -475,7 +475,7 @@ checksum_mismatch:
 			
 			; clear header
 			
-			pop	hl
+			pop	hl			; header
 			ld	b,#69
 clear_loop:
 			ld	(hl),#0
@@ -502,22 +502,20 @@ clear_loop:
 			;ld	de,#0;	x170			; load adr
 			;ld	e,19(iy)
 			;ld	d,20(iy)
-			ld	iy,(#rom_workspace)
-			ld	1(iy),#C_FSIZE		
-			ld	2(iy),#C_FSIZE>>8
-			ld	3(iy),#1			
-			ld	(iy),#3
-			call send_command_iy
-			ld	bc,(#rom_response+3)	; size
-			ld	iy,(#amsdos_inheader)
-			ld	29(iy),c
-			ld	30(iy),b
+			;ld	iy,(#rom_workspace)
+			;ld	1(iy),#C_FSIZE		
+			;ld	2(iy),#C_FSIZE>>8
+			;ld	3(iy),#1			
+			;ld	(iy),#3
+			;call send_command_iy
+			ld	bc,#0  ;(#rom_response+3)	; size
+			;ld	iy,(#amsdos_inheader)
 			ld	e,cas_buf_l(iy)
 			ld	d,cas_buf_h(iy)
 			push	iy
 			pop	hl
 			
-			;or	a	; z = 0
+				;or	a	; z = 0
 			scf		; c = 1
 			sbc	a,a
 			ld	a,#0x16	; x2
@@ -540,9 +538,6 @@ checksum_ok:
 			pop	de	; filename
 
 			
-			; HL = AMSDOS header
-			;pop	hl	;de
-			;ex	de,hl
 			
 			; DE = load address
 			ld	e,21(iy)
@@ -592,21 +587,21 @@ _cas_in_abandon:
 			sbc	a,a
 			ret
 
-;C_SDEBUG .equ 0x43FF
-;debug:		push bc
-;			push af
-;			ld	bc,#DATAPORT				; data out port
-;			out (c),c
-;			ld	a,#C_SDEBUG
-;			out	(c),a						; command lo
-;			ld	a,#C_SDEBUG>>8
-;			out	(c),a						; command	hi
-;			pop	af
-;			out	(c),a	
-;			ld	bc,#ACKPORT
-;			out (c),c							
-;			pop bc
-;			ret			
+C_SDEBUG .equ 0x43FF
+debug:		push bc
+			push af
+			ld	bc,#DATAPORT				; data out port
+			out (c),c
+			ld	a,#C_SDEBUG
+			out	(c),a						; command lo
+			ld	a,#C_SDEBUG>>8
+			out	(c),a						; command	hi
+			pop	af
+			out	(c),a	
+			ld	bc,#ACKPORT
+			out (c),c							
+			pop bc
+			ret			
 ; ------------------------- cas_in_char replacment BC80 
 _cas_in_char:
 			push	hl
@@ -614,7 +609,7 @@ _cas_in_char:
 			push de
 			push	iy
 			ld	iy,(#amsdos_inheader)
-			
+		
 			; size > 0
 			
 			ld	e,cas_size_l(iy)			;	size
@@ -791,6 +786,7 @@ _cas_return:
 _cas_test_eof:	push	hl
 			push	de
 			push	iy
+		
 			ld	iy,(#amsdos_inheader)
 			ld	a,cas_in_next_byte(iy)			; last char+1
 			cp	#0x1A
@@ -822,6 +818,8 @@ is_eof:		pop	iy
 			
 not_eof:		
 			pop	iy
+			pop	de
+			pop	hl
 			ld	a,#0x20
 			or	a	; z = 0
 			scf		; c = 1
@@ -919,7 +917,7 @@ open_w_ok:	push	bc
 			
 			ld	cas_out_isdirect(iy),#1
 			ld	cas_size_l(iy),#0			;	
-			ld	cas_size_h(iy),#0			; size
+			ld	cas_size_h(iy),#8			; size
 			ld	cas_buf_l(iy),e			; 2k buffer
 			ld	cas_buf_h(iy),d			; 
 			ld	cas_idx_l(iy),e			; 
@@ -971,6 +969,8 @@ _cas_out_char:	push	iy
 			ld	d, cas_buf_h(iy)	
 			ld	cas_idx_l(iy),e
 			ld	cas_idx_h(iy),d
+			ld	cas_size_l(iy),#0
+			ld	cas_size_h(iy),#8
 			;ld	hl,#0x800		; size
 			ld	a,#2			; fd
 			call	fwrite
@@ -1766,6 +1766,114 @@ no_dir_buf:	pop	bc
 			pop	de
 			pop	hl
 			ret
+			
+			; ------------------------- LS command
+			; displays directory with long filenames
+			; mode 0 15 chars
+			; mode 1 35 chars
+			; mode 2 75 chars
+			; +3 chars for folders
+ls:
+			ld	iy,(#rom_workspace)
+			ld	1(iy),#C_DIRSETARGS
+			ld	2(iy),#C_DIRSETARGS>>8
+			cp	#1
+			jp	nz, ls_no_args
+			; get string
+			ld	l,(ix)
+			ld	h,1(ix)
+			ld	b,(hl)	; string len
+			inc	hl
+			ld	e,(hl)	; string ptr lo
+			inc	hl
+			ld	d,(hl)	; string ptr hi
+			ex	de,hl
+			push	iy
+			pop	de
+			inc	de
+			inc	de
+			inc	de
+			call	strcpy
+			add	#2
+			ld	(iy),a
+			call	send_command_iy
+			jr	ls_cont
+ls_no_args:	
+			ld	(iy), #3
+			ld	3(iy),#0
+			call	send_command_iy
+ls_cont:			
+			ld	hl,#text_drive
+			call	disp_msg
+			; display current path
+			ld	0(iy),#2
+			ld	1(iy),#C_GETPATH
+			ld	2(iy),#C_GETPATH>>8
+			call	send_command_iy
+			ld	hl,#rom_response+3
+			call	disp_msg
+			call	crlf
+			call	crlf
+			
+			call	txt_get_window		; get max width
+			ld	a,d
+			sub	#4
+			ld	d,a
+						
+ls_loop:		ld	a,#3
+			ld	bc,#DATAPORT
+			out	(c),a			; size cmd + maxfilenamelen
+			ld	a,#C_READDIR
+			out	(c),a
+			ld	a,#C_READDIR>>8
+			out	(c),a
+
+			out	(c),d		; maxfilenamelen
+			ld	b,#ACKPORT>>8
+			out	(c),c
+			
+			ld	hl,#rom_response
+			ld	a,(hl)
+			cp	#2
+			jr	z, ls_done
+			; display entry
+			ld	hl,#rom_response+3
+			call	disp_msg
+			ld	a,(rom_response+3)
+			cp	#'>'
+			jr	nz,isfile
+			call	crlf
+			jr	ls_cont1
+isfile:		ld	a,d
+			push	hl
+			inc	a
+			call	txt_set_column
+			pop	hl
+			; display size
+			inc	hl
+			
+			call	disp_msg
+ls_cont1:		
+			call	check_esc_key
+			cp	#0xFC	; pressed twice ? ok leave...
+			jr	nz,ls_loop
+			ld	hl,#text_break
+			call	disp_msg
+			; exit
+			scf
+			sbc	a,a
+			ret	
+			
+			
+ls_done:			
+			ld	hl,#sfree_cmd
+			call	send_command
+			call	crlf			
+			ld	hl,#rom_response+3
+			call	disp_msg
+			scf
+			sbc	a,a
+			ret	
 ; ------------------------- HTTP GET - download file from http to current path
 httpget:
 			ld	iy,(#rom_workspace)
@@ -3594,19 +3702,18 @@ romconfig_fn:
 autoexec_fn:	.ascii "/AUTOEXEC.BAS"
 			.db	0
 sdir_cmd:
-			.db 2			; size
-			.dw C_READDIR	; command C_sdir
-
+			.db	2			; size
+			.dw	C_READDIR	; command C_sdir
 sfree_cmd:
-			.db 2			; size
-			.dw C_FREE	; command C_sdir
+			.db	2			; size
+			.dw	C_FREE	; command C_sdir
 
 seek_cmd:
-			.db 2			; size
-			.dw C_SEEK	; command C_sdir
+			.db	2			; size
+			.dw	C_SEEK	; command C_sdir
 
 eof_cmd:
-			.db 2
+			.db	2
 			.dw	C_EOF
 
 ftell_cmd:
@@ -3614,9 +3721,6 @@ ftell_cmd:
 			.dw	C_FTELL
 			.db	1		; read fd
 
-debug_cmd:
-			.db 2			; size
-			.dw 0x43FF
 
 fail_msg:
 			.ascii "File not found or other error."

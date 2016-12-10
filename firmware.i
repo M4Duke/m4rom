@@ -20,12 +20,15 @@ txt_output					.equ	0xbb5a
 txt_wr_char					.equ 0xbb5d
 txt_rd_char					.equ 0xbb60
 txt_get_window					.equ 0xbb69
+txt_set_column					.equ 0xbb6f
 txt_set_cursor					.equ	0xbb75
 txt_get_cursor					.equ	0xbb78
 txt_place_cursor				.equ	0xbb8a
 txt_remove_cursor				.equ	0xbb8d
 
 km_read_char					.equ 0xbb09
+
+scr_get_mode					.equ	0xbc11
 
 mc_start_program		   		.equ 0xbd16
 mc_wait_flyback				.equ 0xbd19
