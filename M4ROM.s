@@ -136,7 +136,7 @@ init_rom:		push de
 			
 			ld	de, #fio_jvec
 init_cont:			
-			ld	(iy),#10+3			; config size+3 (to increase)
+			ld	(iy),#16+3			; config size+3 (to increase)
 			ld	1(iy),#C_CONFIG
 			ld	2(iy),#C_CONFIG>>8
 			ld	3(iy),#0			; config offset (0..251)
@@ -155,6 +155,19 @@ init_cont:
 			ld	12(iy),l			; 08 regular workspace for rom l
 			ld	13(iy),h			; 09 regular workspace for rom h
 			
+			push	iy
+			pop	hl
+			ld	de,#14
+			add	hl,de
+			ex	de,hl
+			ld	hl,#0xbb5a
+			ldi
+			ldi
+			ldi
+			ld	hl,#0xbc6e
+			ldi
+			ldi
+			ldi
 			call	send_command_iy
 			call	patch_fio
 			pop	hl
@@ -1086,7 +1099,33 @@ patch_fio:
 			ld	bc,#36
 			ldir 
 			ret
-
+autoexec_patch:
+			ld	hl,#jump_vec2
+			ld	de,#0xbc6e
+			ldi
+			ldi
+			ld	hl,#rom_num
+			ldi
+			ld	hl,#0xbb5a
+			ld	(hl),#0xdf
+			inc	hl
+			ld	(hl),#0x6e
+			inc	hl
+			ld	(hl),#0xbc
+			ret
+undo_patch2:
+			ld	hl,#old_bb5a
+			ld	de,#0xbb5a
+			ldi
+			ldi
+			ldi
+			ld	hl,#old_bc6e
+			ld	de,#0xbc6e
+			ldi
+			ldi
+			ldi
+			ret
+			
 			; ------------------------- fopen
 			; -- parameters: 
 			; -- HL = filename
@@ -1410,12 +1449,49 @@ fclose:
 			jp	nz, past_autoexec
 			xor	a
 			ld (UDIR_RAM_Address),a
-
+			
+			
 			; run autoexec.bas if present
 
 			ld	hl,#init_msg
 			call	disp_msg
 			
+			call	autoexec_patch
+			
+past_autoexec:	ld	a,#255		
+fclose_ok:	;xor	a
+			pop	iy
+			pop	hl
+			pop	bc
+			ret
+
+load_autoexec:	
+			di
+			ex	af,af'
+			exx
+			ld	a,c
+			pop	de
+			pop	bc				
+			pop	hl
+			ex	(sp),hl
+			push	bc	
+			push de
+			ld	c,a
+			ld	b,#0x7f			
+			ld	hl,#autoexec1
+			push hl
+			exx
+			ex	af,af'
+			ei
+			ret
+autoexec1:			
+			push	af
+			push	bc
+			push	de
+			push	hl
+			push	iy
+			call	undo_patch2
+			ld	iy,(#rom_workspace)
 			ld	hl, #autoexec_fn
 			ld	c,#0x80 | FA_READ
 			ld	a,#17
@@ -1426,7 +1502,7 @@ fclose:
 			inc	hl
 			ld	a,(hl)		; res
 			cp	#0
-			jp	nz, past_autoexec
+			jp	nz, past_autoexec2
 			
 			; check if file size > 0 
 			
@@ -1448,7 +1524,7 @@ fclose:
 			ld	3(iy),b			; fd
 			ld	(iy),#3	; size - cmd(2) + fd(1)
 			call send_command_iy
-			jp	past_autoexec
+			jp	past_autoexec2
 			
 autoexec_not0:			
 			; get header
@@ -1502,17 +1578,21 @@ basic10:
 			ld (#0xAE85),hl
 			ld (#0xAE87),hl
 			ld (#0xAE89),hl	
-
-go_far:		pop	iy
-			pop	hl
-			pop	bc
-			cp	#0
+		
+go_far:		cp	#0
 			jr	z,is464
 			cp	#1
 			jr	z,is664
 			.db	0xDF
 			.dw far_addr6128
-
+past_autoexec2:
+			pop	iy
+			pop	hl
+			pop	de
+			pop	bc
+			pop	af
+			jp	0xbb5a
+			
 is664:		.db	0xDF
 			.dw far_addr664
 
@@ -1528,13 +1608,6 @@ far_addr6128:
 			.dw	0xEA78
 			.db	0
 				
-past_autoexec:	ld	a,#255		
-fclose_ok:	;xor	a
-			pop	iy
-			pop	hl
-			pop	bc
-			ret
-
 			
 			; ------------------------- _cas_catalog replacement BC9B
 			; input
@@ -3781,18 +3854,23 @@ ff_error_map:
 			.db 0xFF	;FR_TOO_MANY_OPEN_FILES	18
 			.db 0xFF	;FR_INVALID_PARAMETER	19
 			.db 0xE	; already open			20
+jump_vec2:		.dw	load_autoexec	; 10
 					
 .org rom_response
 				.ds	0xC00
 
 .org	rom_config
-amsdos_inheader:	.dw	0
-jump_vec:			.dw	0
-rom_num:			.db	0
-init_count:		.db	0
-amsdos_outheader:	.dw	0
-rom_workspace:		.dw	0
-reserved:			.ds	(64-10)
+amsdos_inheader:	.dw	0	; 0
+jump_vec:			.dw	0	; 2
+rom_num:			.db	0	; 4
+init_count:		.db	0	; 5
+amsdos_outheader:	.dw	0	; 6
+rom_workspace:		.dw	0	; 8
+old_bb5a:			.ds	3	; 10
+old_bc6e:			.ds	3	; 13
+						; 16
+				
+reserved:			.ds	(64-16)
 				
 .org	sock_status
 sock_info:	.ds	80	; 5 socket status structures (0 is used for gethostbyname*, 1-4 returned by socket function) of 16 bytes
