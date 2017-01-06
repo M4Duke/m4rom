@@ -13,6 +13,7 @@
 rom_response					.equ	0xE000
 rom_config					.equ rom_response+0xC00
 sock_status					.equ	0xFE00
+rom_table						.equ	0xFF00
 UDIR_RAM_Address 				.equ 0xBEA3
 
 DATAPORT						.equ 0xFE00
@@ -25,62 +26,62 @@ ACKPORT						.equ 0xFC00
 
 			; RSX jump block
 			
-			jp 	init_rom
-			jp	temp			; |A
-			jp	change_dir	; |CD
-			jp	copy_file		; |COPYF
-			jp 	directory		; |DIR
-			jp	temp			; |DISC
-			jp	temp			; |DRIVE
-			jp	erase_file	; |ERA
-			jp	httpget		; |HTTPGET
-			jp	httpgetmem	; |HTTPMEM
-			jp	m4off		; |M4ROMOFF
-			jp	makedir		; |MKDIR
-			jp	setnetwork	; |NETSET
-			jp	netstat		; |NETSTAT
-			jp	rename_file	; |REN
-			jp	gettime		; |TIME
-			jp	upgrade		; |UPGRADE
-			jp	version		; |VERSION
-			jp	temp			; 0x81	Set message
-			jp	temp			; 0x82	Drive speed
-			jp	temp			; 0x83	Disc type
-			jp	read_sector	; 0x84	Read sector
-			jp	write_sector	; 0x85	Write sector
-			jp	temp			; 0x86	Format track
-			jp	temp			; 0x87	Seek track
-			jp	temp			; 0x88	Test drive
-			jp	temp			; 0x89	Set retry count
-			jp	rom_upload	; |ROMUP
-			jp	rom_set		; |ROMSET
-			jp	rom_update	; |ROMUPD
-			jp	fcopy_file	; |FCP
-			jp 	ls			; |ls
-			jp	UDIR
-			jp	GETPATH
-			jp	LongName
-			.org 0xC072
-  			jp	init_plus
+			jp 	init_rom		;			0xC006
+			jp	patch_fio		; |SD 		0xC009
+			jp	disc			; |DISC		0xC00C
+			jp	change_dir	; |CD		0xC00F
+			jp	copy_file		; |COPYF		0xC012
+			jp	tape			; |TAPE		0xC015
+			jp	httpget		; |HTTPGET	0xC018
+			jp	httpgetmem	; |HTTPMEM	0xC01B
+			jp	drvA			; |A			0xC01E
+			jp	drvB			; |B			0xC021
+			jp	drive		; |DRIVE		0xC024
+			jp	user			; |USER		0xC027
+			jp 	directory		; |DIR		0xC02A
+			jp	erase_file	; |ERA		0xC02D
+			jp	rename_file	; |REN		0xC030
+			jp	set_message	; 0x81		0xC033
+			jp	setup_disc	; 0x82		0xC036
+			jp	select_format	; 0x83		0xC039
+			jp	read_sector	; 0x84		0xC03C
+			jp	write_sector	; 0x85		0xC03F
+			jp	format_track	; 0x86		0xC042
+			jp	move_track	; 0x87		0xC045
+			jp	get_dr_status	; 0x88		0xC048
+			jp	set_retry_cnt	; 0x89		0xC04B
+			jp	m4off		; |M4ROMOFF	0xC04E
+			jp	makedir		; |MKDIR		0xC051
+			jp	setnetwork	; |NETSET		0xC054
+			jp	netstat		; |NETSTAT	0xC057
+			jp	gettime		; |TIME		0xC05A
+			jp	upgrade		; |UPGRADE	0xC05D
+			jp	version		; |VERSION	0xC060
+			jp	rom_upload	; |ROMUP		0xC063
+			jp	rom_set		; |ROMSET		0xC066
+			jp	rom_update	; |ROMUPD		0xC069
+			jp 	ls			; |ls		0xC06C
+			jp	UDIR			; |UDIR		0xC06F
+			jp	init_plus		;			0xC072
+			jp	GETPATH		; |UDIR		0xC075
+			jp	LongName		; |UDIR		0xC078
+  			
 rsx_commands:
 			.ascis "M4 BOARD"	
-			.ascis "A"
+			.ascis "SD"
+			.ascis "DISC"
 			.ascis "CD"
 			.ascis "COPYF"
-			.ascis "DIR"
-			.ascis "DISC"
-			.ascis "DRIVE"
-			.ascis "ERA"
+			.ascis "TAPE"
 			.ascis "HTTPGET"
 			.ascis "HTTPMEM"
-			.ascis "M4ROMOFF"
-			.ascis "MKDIR"
-			.ascis "NETSET"
-			.ascis "NETSTAT"
+			.ascis "A"
+			.ascis "B"
+			.ascis "DRIVE"
+			.ascis "USER"
+			.ascis "DIR"
+			.ascis "ERA"
 			.ascis "REN"
-			.ascis "TIME"
-			.ascis "UPGRADE"
-			.ascis "VERSION"
 			.db 0x81	; Set message
 			.db 0x82	; Drive speed
 			.db 0x83	; Disc type
@@ -90,20 +91,27 @@ rsx_commands:
 			.db 0x87	; Seek track
 			.db 0x88	; Test drive
 			.db 0x89	; Set retry count
+			.ascis "M4ROMOFF"
+			.ascis "MKDIR"
+			.ascis "NETSET"
+			.ascis "NETSTAT"
+			.ascis "TIME"
+			.ascis "UPGRADE"
+			.ascis "VERSION"
 			.ascis "ROMUP"
 			.ascis "ROMSET"
 			.ascis "ROMUPD"
-			.ascis "FCP"
 			.ascis "LS"
 			.ascis "UDIR"
+			.db	0x8A	; plus init
 			.ascis "GETPATH"
 			.ascis "LONGNAME"
 			.db 0
 
 ; work space map
-; 000-073 : Amsdos openin header
-; 074-143 : Amsdos openout header
-; 144-271	: actual work buffer
+; 000-073 : Amsdos openin header (if amsdos not present, otherwise use amsdos cas_in_header)
+; 074-143 : Amsdos openout header	(if amsdos not present, otherwise use amsdos cas_out_header)
+; 144-272	: actual work buffer
 
 cas_out_isdirect	.equ	-5
 cas_buf_l			.equ -4
@@ -121,40 +129,98 @@ cas_in_eof		.equ	0x24
 
 init_rom:		push de
 			push hl
-			cp	#0			; normally a is 0, but if called by m4 bootrom a == rom number
-			call z, #hi_kl_curr_selection
-		
 			pop	iy
-			ld	bc,#-276			; 144+128+4
+			
+			; detect if amsdos present?
+			ld	a,(0xBC77)
+			cp	#0xDF			
+			jr	z, use_amsdos
+			
+			ld	bc,#-276			; 144+128
 			add	iy,bc
-			push	iy				; workspace start
-		
+			
+			; save tape functions
+			; BCA7-BC77 = 48
+			
+			ld	(iy),#48+3		; config size+3 
+			ld	1(iy),#C_CONFIG
+			ld	2(iy),#C_CONFIG>>8
+			ld	3(iy),#22			; config offset
 			push	iy
-			pop	hl
-			ld	bc,#5
-			add	hl,bc			; point to amsdos in header
+			pop	de
+			inc	de
+			inc	de
+			inc	de
+			inc	de
+			ld	hl,#0xBC77
+			ld	bc,#48
+			ldir
+			call	send_command_iy
+			jr	init_cnt
+use_amsdos:
+			ld	bc,#-128			; 128
+			add	iy,bc
+init_cnt:		push	iy				; workspace start
+		
 			
 			ld	de, #fio_jvec
 init_cont:			
-			ld	(iy),#16+3			; config size+3 (to increase)
+			ld	(iy),#19+3			; config size+3 (to increase)
 			ld	1(iy),#C_CONFIG
 			ld	2(iy),#C_CONFIG>>8
 			ld	3(iy),#0			; config offset (0..251)
-			ld	4(iy),l			; 00 amsdos in header l
-			ld	5(iy),h			; 01 amsdos in header  h
 			ld	6(iy),e			; 02 patch jump vector l
 			ld	7(iy),d			; 03 patch jump vector h
+			call #hi_kl_curr_selection
 			ld	8(iy),a			; 04 current rom
 			ld	9(iy),#0			; 05 init count.
+			ld	a,#0x80
+			cp	c
+			jr	z,amsdos_buffers
+			push	iy
+			pop	hl
+			
+			ld	bc,#5
+			add	hl,bc			; point to amsdos in header
+			
+			ld	4(iy),l			; 00 amsdos in header l
+			ld	5(iy),h			; 01 amsdos in header  h
 			ld	bc,#74
 			add	hl,bc			
 			ld	10(iy),l			; 06 amsdos out header l
 			ld	11(iy),h			; 07 amsdos out header h
 			ld	bc,#74-5
+			add	hl,bc		
+			ld	20(iy),#0
+			ld	21(iy),#0
+				
+			jr	no_amsdos_buffers
+amsdos_buffers:
+			ld	hl,(0xBE7D)
+			ld	bc,#0x55
+			add	hl,bc			; point to amsdos in header
+			
+			ld	4(iy),l			; 00 amsdos in header l
+			ld	5(iy),h			; 01 amsdos in header  h
+			ld	bc,#74
 			add	hl,bc			
+			ld	10(iy),l			; 06 amsdos out header l
+			ld	11(iy),h			; 07 amsdos out header h
+			
+			ld	hl,(0xBE7D)
+			dec	hl
+			dec	hl
+			ld	a,(hl)			; amsdos rom number
+			ld	c,a
+			ld	21(iy),c
+			call	#0xB915			; probe rom
+			ld	20(iy),h			; amsdos version
+			push	iy
+			pop	hl
+			inc	hl
+no_amsdos_buffers:
 			ld	12(iy),l			; 08 regular workspace for rom l
 			ld	13(iy),h			; 09 regular workspace for rom h
-			
 			push	iy
 			pop	hl
 			ld	de,#14
@@ -168,6 +234,9 @@ init_cont:
 			ldi
 			ldi
 			ldi
+			ld	c,#0		; check basic rom ver
+			call	#0xB915	
+			ld	22(iy),h
 			call	send_command_iy
 			call	patch_fio
 			pop	hl
@@ -1492,9 +1561,27 @@ autoexec1:
 			push	iy
 			call	undo_patch2
 			ld	iy,(#rom_workspace)
+			ld	hl, #runfile_ptr
+			ld	e,(hl)
+			inc	hl
+			ld	d,(hl)
+			push	de
+			; reset filename ptr back to autoexec.bas, in case it was overwritten, for next softreset!
 			ld	hl, #autoexec_fn
+			ld	(iy),#3+2
+			ld	1(iy),#C_CONFIG
+			ld	2(iy),#C_CONFIG>>8
+			ld	3(iy),#20			; config offset (0..251)
+			ld	4(iy),l
+			ld	5(iy),h
+				
+			call	send_command_iy
+			pop	hl
+			call	strlen
+			add	#3
 			ld	c,#0x80 | FA_READ
-			ld	a,#17
+			
+			
 			ld	de, #C_OPEN
 			call	send_command2	
 			ld	hl,#rom_response+3
@@ -1557,9 +1644,15 @@ autoexec_not0:
 			ld	3(iy),a			; fd
 			ld	(iy),#3	; size - cmd(2) + fd(1)
 			call send_command_iy
-			ld	c,#0
-			call	#0xB915	; probe rom
-			ld	a,h		; version
+			
+			; check if binary file
+			ld	a,18(iy)
+			cp	#2
+			jr	z,exec_binary
+			
+			;ld	c,#0
+			;call	#0xB915	; probe rom
+			ld	a,(basic_ver)	; version
 			pop	hl
 			ld	bc,#0x170
 			add	hl,bc
@@ -1607,7 +1700,16 @@ far_addr664:
 far_addr6128:	
 			.dw	0xEA78
 			.db	0
-				
+exec_binary:	
+			; get entry point
+			ld	l,19(iy)
+			ld	h,20(iy)
+			pop	iy
+			pop	de	; was hl
+			pop	de
+			pop	bc
+			pop	af
+			jp	(hl)
 			
 			; ------------------------- _cas_catalog replacement BC9B
 			; input
@@ -1640,8 +1742,21 @@ _cas_catalog:
 			scf
 			sbc	a,a
 			ret	
-directory:
-			ld	iy,(#rom_workspace)
+directory:	ld	iy,(#rom_workspace)
+			push	hl
+			push	bc
+			push	af
+			
+			; is it for amsdos?
+			ld	b,#11
+			ld	a,(0xBC78)
+			cp	#0xA4
+			jp	nz,pass_to_amsdos
+			
+			pop	af
+			pop	bc
+			pop	hl	
+			
 			; set no workbuf
 			ld	120(iy),#0
 			ld	121(iy),#0
@@ -2248,6 +2363,20 @@ cont_http_recv2:
 
 ; ------------------------- ERA - erase file replacement
 erase_file:
+			push	hl
+			push	bc
+			push	af
+			
+			; is it for amsdos?
+			ld	b,#12
+			ld	a,(0xBC78)
+			cp	#0xA4
+			jp	nz,pass_to_amsdos
+			
+			pop	af
+			pop	bc
+			pop	hl	
+			
 			cp	#0
 			jp	z,bad_args
 			
@@ -2286,6 +2415,19 @@ erase_ok:	scf
 
 ; ------------------------- REN - rename file replacement
 rename_file:
+			push	hl
+			push	bc
+			push	af
+			
+			; is it for amsdos?
+			ld	b,#13
+			ld	a,(0xBC78)
+			cp	#0xA4
+			jp	nz,pass_to_amsdos
+			
+			pop	af
+			pop	bc
+			pop	hl	
 			cp	#2			; 2 arguments?
 			jr	nz, bad_args
 			ld	iy,(#rom_workspace)
@@ -2403,155 +2545,6 @@ copy_file:
 			sbc	a,a
 			ret
 
-; ------------------------- copy file from floppy to sd
-fcopy_file:
-			cp	#2			; 2 arguments?
-			jp	nz, fcp_error
-			ld	iy,(#rom_workspace)
-			ld	1(iy),#C_OPEN
-			ld	2(iy),#C_OPEN>>8
-			
-			; get dest path
-			ld	l,(ix)
-			ld	h,1(ix)
-			ld	c,(hl)	; string len
-			ld	b,#0
-			inc	hl
-			ld	e,(hl)	; string ptr lo
-			inc	hl
-			ld	d,(hl)	; string ptr hi
-			ex	de,hl
-			push	iy
-			pop	de
-			inc	de
-			inc	de
-			inc	de
-			inc	de
-			push	bc
-			ldir	
-			pop	bc
-			ex	de,hl	
-			dec	hl
-			ld	a,(hl)	
-			cp	#'/'		; does it end with slash
-			jr	z,has_slash
-			cp	#'\'
-			jr	z,has_slash
-			inc	hl
-			inc	c		; path len++
-			ld	a,#'/'
-			ld	(hl),a
-			
-has_slash:	inc	hl
-			; save end of path ptr and len
-			push	bc
-			push	hl
-			
-			
-			; get 2nd string (filename)
-		
-			ld	l,2(ix)
-			ld	h,3(ix)
-			ld	b,(hl)			; string len
-			inc	hl
-			ld	e,(hl)			; string ptr lo
-			inc	hl
-			ld	d,(hl)			; string ptr hi
-			pop	hl				; end of path
-			ex	de,hl
-			
-			call	strcpynz			; copy filename to end of path
-			; a = filename len + 1, b = filename len
-			pop	de				; current len of path
-			add	e				; add filename len to path len
-			add	#3				; + command (2) + mode (1)
-			ld	(iy),a			; total C_OPEN size
-			
-			; now lets open the file on disk via amsdos!
-			; hl still filename
-			ld	de,#0x9000		; use this as 2k buffer (dirty!)
-			call cas_in_open
-			jr	nc,fcp_error
-			
-			; ok we got the file, lets roll...
-			
-			ld	3(iy),#0x80 |FA_CREATE_ALWAYS| FA_WRITE
-			call	send_command_iy
-			ld	a,(#rom_response+4)
-			cp	#0
-			jr	nz,fcp_error
-			
-			
-			; get amsdos area
-			ld	hl,(#0xbe7d)
-			ld	bc,#85
-			add	hl,bc
-			push	hl
-			ld	bc,#18
-			add	hl,bc
-			ld	a,(hl)
-			pop	de
-			cp	#0x16
-			ld	a,(#rom_response+3)	; get fd
-			jr	z,fcopy_loop
-
-			; write header
-			
-			ld	hl, #0x80			; header size
-			push	af
-			call fwrite
-			pop	af
-			
-			; copy data
-fcopy_loop:
-			push	af	; save fd
-	
-			; fill buffer
-			ld	bc,#0
-fcopy_buffer:	
-			
-			call cas_in_char
-			jr	c, fcopy_cont
-			cp	#0x1A		; check for fake EOF
-			jr	nz,fcopy_done
-fcopy_cont:
-			inc	bc
-			ld	a,#0x8
-			cp	b		; #0x800 yet ?
-			jr	nz, fcopy_buffer
-			
-fcopy_done:	xor	a
-			cp	b
-			jr	nz, not_all_done
-			cp	c
-			jr	z, fcopy_finished
-			
-			; write data out
-
-not_all_done:	ld	l,c
-			ld	h,b
-			ld	de,#0x9000
-			pop	af
-			push	af
-			call fwrite
-			pop	af
-			
-			jr	fcopy_loop
-fcopy_finished:
-			pop	af		; file fd
-			call	fclose
-			call	cas_in_close
-			ret
-
-sd_open_error:	call	cas_in_close
-fcp_error:
-			ld	hl,#miss_arg
-			call	disp_msg
-			scf
-			sbc	a,a
-			ret
-
-							
 ; ------------------------- MKDIR - make directory
 makedir:
 			cp	#0
@@ -2753,6 +2746,20 @@ m4off:		push	iy
 ; -- D  = track number
 ; -- C  = sector number
 read_sector:
+			push	hl
+			push	bc
+			push	af
+			
+			; is it for amsdos?
+			ld	b,#17
+			ld	a,(0xBC78)
+			cp	#0xA4
+			jp	nz,pass_to_amsdos
+			
+			pop	af
+			pop	bc
+			pop	hl	
+			
 			push	iy
 			push	hl
 			ld	iy,(#rom_workspace)
@@ -2780,6 +2787,20 @@ read_sector:
 ; -- D  = track number
 ; -- C  = sector number
 write_sector:
+			push	hl
+			push	bc
+			push	af
+			
+			; is it for amsdos?
+			ld	b,#18
+			ld	a,(0xBC78)
+			cp	#0xA4
+			jp	nz,pass_to_amsdos
+			
+			pop	af
+			pop	bc
+			pop	hl	
+			
 			push	hl
 			push	bc
 			ld	bc,#DATAPORT
@@ -3462,7 +3483,13 @@ hreceive:     	;A=destination bank, DE=destination address, IYH,C=length, HL=M4 
 UDIR:		ld a,(#UDIR_RAM_Address)
 			cp #0
 			ret z
-
+			; reset dir count
+			ld	iy,(#rom_workspace)
+			ld	1(iy),#C_DIRSETARGS
+			ld	2(iy),#C_DIRSETARGS>>8
+			ld	(iy), #3
+			ld	3(iy),#0
+			call	send_command_iy
 NextGetEntry:
 			ld	iy,(#rom_workspace)
 			ld	(iy),#2
@@ -3764,6 +3791,242 @@ crlf:		ld	a,#10
 			call	txt_output
 			ld	a,#13
 			jp	txt_output	
+
+			; get amsdos table
+			
+			; -- hardcoded for AMSDOS v0.5 / v0.7 or PARADOS for now
+			
+			; b = func num
+get_amsdos_ptr:
+			ld	a,(amsdos_ver)
+			ld	hl,#amsdos_table05
+			cp	#5
+			jr	z,isv05
+			cp	#7
+			jr	nz,no_amsdos
+			ld	hl,#amsdos_table07
+isv05:		
+funcloop:		inc	hl
+			inc	hl
+			djnz	funcloop
+			ld	a,(hl)
+			inc	hl
+			ld	h,(hl)
+			ld	l,a
+			ld	a,h
+			ret
+no_amsdos:	xor	a
+			ret
+; |DISC command
+
+			
+disc:		push	hl
+			push	bc
+			push	af
+			ld	b,#1			; function 
+
+pass_to_amsdos:
+			call	get_amsdos_ptr
+			cp	#0
+			jp	nz,jumper
+			
+			; check if amsdos present at all, if not |disc is same as |sd
+			ld	a,(amsdos_ver)
+			cp	#0
+			jr	nz, m4pass
+			call	patch_fio
+			
+m4pass:		pop	af
+			pop	bc
+			pop	hl
+			ret
+
+			; |TAPE
+
+tape:		push	hl
+			push	bc
+			push	af
+			
+			; SD mode?
+			ld	a,(0xBC78)
+			cp	#0xA4
+			jr	nz,amsdos_mode
+			
+			; only copy vectors if not present amsdos, otherwise let amsdos copy the vectors
+			ld	a,(amsdos_ver)
+			cp	#0
+			jr	nz, amsdos_mode
+			ld	hl,#tape_functions			
+			ld	de,#0xbc77
+			ld	bc,#48
+			ldir
+			jp	m4pass
+amsdos_mode:			
+			ld	b,#4
+			jp	pass_to_amsdos
+
+			; |A
+			
+drvA:		push	hl
+			push	bc
+			push	af
+			
+			; if SD mode ignore
+			ld	a,(0xBC78)
+			cp	#0xA4
+			jp	z,m4pass
+			
+			ld	b,#7
+			jp	pass_to_amsdos
+
+			; |B
+			
+drvB:		push	hl
+			push	bc
+			push	af
+			
+			; if SD mode ignore
+			ld	a,(0xBC78)
+			cp	#0xA4
+			jp	z,m4pass
+			
+			ld	b,#8
+			jp	pass_to_amsdos
+
+drive:		push	hl
+			push	bc
+			push	af
+			
+			; if SD mode ignore
+			ld	a,(0xBC78)
+			cp	#0xA4
+			jp	z,m4pass
+			
+			ld	b,#9
+			jp	pass_to_amsdos
+
+user:		push	hl
+			push	bc
+			push	af
+			
+			; if SD mode ignore
+			ld	a,(0xBC78)
+			cp	#0xA4
+			jp	z,m4pass	; todo
+			
+			ld	b,#10
+			jp	pass_to_amsdos
+						
+
+set_message:	push	hl
+			push	bc
+			push	af
+			
+			; if SD mode ignore
+			ld	a,(0xBC78)
+			cp	#0xA4
+			jp	z,m4pass
+			
+			ld	b,#14
+			jp	pass_to_amsdos
+
+setup_disc:	push	hl
+			push	bc
+			push	af
+			
+			; if SD mode ignore
+			ld	a,(0xBC78)
+			cp	#0xA4
+			jp	z,m4pass	; todo
+			
+			ld	b,#15
+			jp	pass_to_amsdos
+
+select_format:	push	hl
+			push	bc
+			push	af
+			
+			; if SD mode ignore
+			ld	a,(0xBC78)
+			cp	#0xA4
+			jp	z,m4pass	; todo
+			
+			ld	b,#16
+			jp	pass_to_amsdos
+										
+format_track:	push	hl
+			push	bc
+			push	af
+			
+			; if SD mode ignore
+			ld	a,(0xBC78)
+			cp	#0xA4
+			jp	z,m4pass	; todo
+			
+			ld	b,#19
+			jp	pass_to_amsdos
+
+move_track:	push	hl
+			push	bc
+			push	af
+			
+			; if SD mode ignore
+			ld	a,(0xBC78)
+			cp	#0xA4
+			jp	z,m4pass	; todo
+			
+			ld	b,#20
+			jp	pass_to_amsdos		
+
+get_dr_status:	push	hl
+			push	bc
+			push	af
+			
+			; if SD mode ignore
+			ld	a,(0xBC78)
+			cp	#0xA4
+			jp	z,m4pass	; todo
+			
+			ld	b,#21
+			jp	pass_to_amsdos
+set_retry_cnt:	push	hl
+			push	bc
+			push	af
+			
+			; if SD mode ignore
+			ld	a,(0xBC78)
+			cp	#0xA4
+			jp	z,m4pass	; todo
+			
+			ld	b,#22
+			jp	pass_to_amsdos
+												
+jumper:		di
+			ld	a,(basic_ver)	; version
+			cp	#0
+			jr	nz, not_basic10
+			ld	a,(amsdos_rom_num)
+			ld	(#0xB1A8),a
+			jr	jumper_cont
+not_basic10:
+			ld	a,(amsdos_rom_num)
+			ld	(#0xB8D6),a
+jumper_cont:			
+			ld	(iy),#0xED	; out (c),a
+			ld	1(iy),#0x79
+			ld	2(iy),#0xF1	; pop af
+			ld	3(iy),#0xC1	; pop bc
+			ld	4(iy),#0xE1	; pop hl
+			ld	5(iy),#0xFB	; ei
+			ld	6(iy),#0xc3	; jump
+			ld	7(iy),l		; addr
+			ld	8(iy),h		; addr
+			push	iy
+			pop	hl
+			ld	iy,(0xBE7D)	; Amsdos workspace
+			ld	bc,#0xDF00
+			jp	(hl)			; jump to ram
+
 					
 data_0:		.db	0,1		
 romslots_fn:
@@ -3774,6 +4037,7 @@ romconfig_fn:
 			.db	0
 autoexec_fn:	.ascii "/AUTOEXEC.BAS"
 			.db	0
+			
 sdir_cmd:
 			.db	2			; size
 			.dw	C_READDIR	; command C_sdir
@@ -3854,11 +4118,67 @@ ff_error_map:
 			.db 0xFF	;FR_TOO_MANY_OPEN_FILES	18
 			.db 0xFF	;FR_INVALID_PARAMETER	19
 			.db 0xE	; already open			20
-jump_vec2:		.dw	load_autoexec	; 10
-					
+
+amsdos_table05:
+			.dw	0xC1B2		; CPM
+			.dw	0xCCD1		; DISC
+			.dw	0xCCD5		; DISC.IN
+			.dw	0xCCE4		; DISC.OUT
+			.dw	0xCCFD		; TAPE
+			.dw	0xCD01		; TAPE.IN
+			.dw	0xCD18		; TAPE.OUT
+			.dw	0xCDDA		; A
+			.dw	0xCDDD		; B
+			.dw	0xCDE4		; DRIVE 
+			.dw	0xCDFE		; USER
+			.dw	0xD42E		; DIR
+			.dw	0xD48A		; ERA
+			.dw 	0xD4C4		; REN
+			.dw	0xCA72		; 81 SetMessage
+			.dw	0xC60D		; 82 SetupDisc
+			.dw	0xC581		; 83 SelectFormat
+			.dw	0xC666		; 84 ReadSector
+			.dw	0xC64E		; 85 WriteSector
+			.dw	0xC652		; 86 FormatTrack
+			.dw	0xC763		; 87 MoveTrack
+			.dw	0xC630		; 88 GetDrStatus
+			.dw	0xC603		; 89 SetRetryCount
+amsdos_table07:
+			.dw	0xC1A9		; CPM
+			.dw	0xCD35		; DISC
+			.dw	0			; DISC.IN
+			.dw	0			; DISC.OUT
+			.dw	0xCD61		; TAPE
+			.dw	0			; TAPE.IN
+			.dw	0			; TAPE.OUT
+			.dw	0xCED1		; A
+			.dw	0xCED4		; B
+			.dw	0xCEDB		; DRIVE 
+			.dw	0xCEF5		; USER
+			.dw	0xD525		; DIR
+			.dw	0xD581		; ERA
+			.dw 	0xD5BB		; REN
+			.dw	0xCAD8		; 81 SetMessage
+			.dw	0xC706		; 82 SetupDisc
+			.dw	0xC581		; 83 SelectFormat
+			.dw	0xC666		; 84 ReadSector
+			.dw	0xC64E		; 85 WriteSector
+			.dw	0xC652		; 86 FormatTrack
+			.dw	0xC792		; 87 MoveTrack
+			.dw	0xC630		; 88 GetDrStatus
+			.dw	0xC603		; 89 SetRetryCount			
+			
+jump_vec2:	.dw	load_autoexec	; 10
+			
+helper_functions:
+				.dw hsend
+				.dw hreceive
+.org rom_response-0x100
+run_filename:
+				.ds 256			; (256-1) max file+path depth
+						
 .org rom_response
 				.ds	0xC00
-
 .org	rom_config
 amsdos_inheader:	.dw	0	; 0
 jump_vec:			.dw	0	; 2
@@ -3868,10 +4188,17 @@ amsdos_outheader:	.dw	0	; 6
 rom_workspace:		.dw	0	; 8
 old_bb5a:			.ds	3	; 10
 old_bc6e:			.ds	3	; 13
-						; 16
-				
-reserved:			.ds	(64-16)
-				
+amsdos_ver:		.db	0	; 16
+amsdos_rom_num:	.db	0	; 17
+basic_ver:		.db	0		; 18
+				.db	0		; 19
+
+runfile_ptr:		.dw	autoexec_fn ; 20
+					; 22
+tape_functions:	.ds	48
+
+
+
 .org	sock_status
 sock_info:	.ds	80	; 5 socket status structures (0 is used for gethostbyname*, 1-4 returned by socket function) of 16 bytes
 ; structure layout
@@ -3882,16 +4209,14 @@ sock_info:	.ds	80	; 5 socket status structures (0 is used for gethostbyname*, 1-
 ;	port			2	- port of the same..
 ;	reserved		6	- not used yet (alignment!).
 ; *for socket 0, gethostbyname, status will be set to 5 when in progress and back to 0, when done.
-			
-helper_functions:
-			.dw hsend
-			.dw hreceive
-.org	0xFF00
+
+.org	rom_table
 			.dw	#0x110	; rom version
 			.dw	rom_response
 			.dw	rom_config
 			.dw	sock_info
 			.dw	helper_functions
+			.dw	run_filename
 	
 .org	0xFFFF
 			.db	0xFF	
