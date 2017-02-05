@@ -10,7 +10,7 @@
 			.include "firmware.i"
 			.include "m4cmds.i"
 
-rom_response					.equ	0xE000
+rom_response					.equ	0xE800
 rom_config					.equ rom_response+0xC00
 sock_status					.equ	0xFE00
 rom_table						.equ	0xFF00
@@ -65,7 +65,8 @@ ACKPORT						.equ 0xFC00
 			jp	init_plus		;			0xC072
 			jp	GETPATH		; |UDIR		0xC075
 			jp	LongName		; |UDIR		0xC078
-  			
+  			jp	wifi_power
+  			jp	file_copy
 rsx_commands:
 			.ascis "M4 BOARD"	
 			.ascis "SD"
@@ -106,6 +107,8 @@ rsx_commands:
 			.db	0x8A	; plus init
 			.ascis "GETPATH"
 			.ascis "LONGNAME"
+			.ascis "WIFI"
+			.ascis "FCP"
 			.db 0
 
 ; work space map
@@ -130,7 +133,7 @@ cas_in_eof		.equ	0x24
 init_rom:		push de
 			push hl
 			pop	iy
-			
+		
 			; detect if amsdos present?
 			ld	a,(0xBC77)
 			cp	#0xDF			
@@ -139,29 +142,12 @@ init_rom:		push de
 			ld	bc,#-276			; 144+128
 			add	iy,bc
 			
-			; save tape functions
-			; BCA7-BC77 = 48
 			
-			ld	(iy),#48+3		; config size+3 
-			ld	1(iy),#C_CONFIG
-			ld	2(iy),#C_CONFIG>>8
-			ld	3(iy),#22			; config offset
-			push	iy
-			pop	de
-			inc	de
-			inc	de
-			inc	de
-			inc	de
-			ld	hl,#0xBC77
-			ld	bc,#48
-			ldir
-			call	send_command_iy
 			jr	init_cnt
 use_amsdos:
 			ld	bc,#-128			; 128
 			add	iy,bc
 init_cnt:		push	iy				; workspace start
-		
 			
 			ld	de, #fio_jvec
 init_cont:			
@@ -238,6 +224,24 @@ no_amsdos_buffers:
 			call	#0xB915	
 			ld	22(iy),h
 			call	send_command_iy
+			; save amsdos or tape functions
+			; BCA7-BC77 = 48
+			
+			ld	(iy),#48+3		; config size+3 
+			ld	1(iy),#C_CONFIG
+			ld	2(iy),#C_CONFIG>>8
+			ld	3(iy),#22			; config offset
+			push	iy
+			pop	de
+			inc	de
+			inc	de
+			inc	de
+			inc	de
+			ld	hl,#0xBC77
+			ld	bc,#48
+			ldir
+			call	send_command_iy
+		
 			call	patch_fio
 			pop	hl
 			pop	de
@@ -1168,6 +1172,47 @@ patch_fio:
 			ld	bc,#36
 			ldir 
 			ret
+patch_fio_in:
+			ld	hl,#jump_vec
+			ld	de,#0xbca4	;	// overwrite cas check...
+			push	de
+			ldi
+			ldi
+			ldi
+			ld	hl,#cas_in_open
+			ld	(hl),#0xdf
+			inc	hl
+			pop	de
+			ld	(hl),e
+			inc	hl
+			ld	(hl),d
+			ld	hl,#cas_in_open
+			ld	de,#cas_in_close
+			ld	bc,#6*3
+			ldir 
+			ld	de,#cas_catalog
+			ld	bc,#3
+			ldir
+			ret			
+patch_fio_out:
+			ld	hl,#jump_vec
+			ld	de,#0xbca4	;	// overwrite cas check...
+			push	de
+			ldi
+			ldi
+			ldi
+			ld	hl,#cas_out_open
+			ld	(hl),#0xdf
+			inc	hl
+			pop	de
+			ld	(hl),e
+			inc	hl
+			ld	(hl),d
+			ld	hl,#cas_out_open
+			ld	de,#cas_out_close
+			ld	bc,#4*3
+			ldir 
+			ret			
 autoexec_patch:
 			ld	hl,#jump_vec2
 			ld	de,#0xbc6e
@@ -3424,6 +3469,505 @@ rom_update:
 			scf
 			sbc	a,a
 			ret	
+wifi_power:	ld	iy,(#rom_workspace)
+			ld	a, 0(ix)		; status
+			ld	1(iy),#C_WIFIPOW
+			ld	2(iy),#C_WIFIPOW>>8
+			ld	3(iy),a
+			ld	(iy),#3			; packet size, cmd (2), 0=off, 1 = on
+			call	send_command_iy
+			ret
+
+catalog_buffer	.equ	0x8000
+inbuffer		.equ	0x8800
+outbuffer		.equ	0x9000
+fileheadin	.equ	0x9800
+fileheadout	.equ	0x9802
+filesize		.equ	0x9804
+filename		.equ	0x9906
+filename2		.equ	0x9986
+header		.equ	0x9A06
+drive_vectors	.equ	0x9A86	; to 0x9AB6
+file_copy:		
+			cp	#2			; 2 arguments?	
+			jr	z,got_args
+			ld	hl,#txt_copy_err
+			jp	disp_msg
+got_args:			
+			; get 1st string (dest filename)
+			ld	l,(ix)
+			ld	h,1(ix)
+			ld	c,(hl)	; string len
+			ld	b,#0
+			inc	hl
+			ld	e,(hl)	; string ptr lo
+			inc	hl
+			ld	d,(hl)	; string ptr hi
+			ex	de,hl
+			ld	de,#filename2
+			ldir
+			xor	a
+			ld	(de),a
+			; get 2nd string (src filename)
+		
+			ld	l,2(ix)
+			ld	h,3(ix)
+			ld	c,(hl)
+			ld	b,#0
+			inc	hl
+			ld	e,(hl)
+			inc	hl
+			ld	d,(hl)
+			ex	de,hl
+			ld	de,#filename
+			ldir
+			xor	a
+			ld	(de),a
+			push	iy
+			
+			ld	hl,(#amsdos_inheader)
+			ld	de,#-0x51
+			add	hl,de
+			ld	a,(hl)	; amsdos drive
+			push	hl
+			push	af
+			ld	hl,#0xBC77
+			ld	de,#drive_vectors
+			ld	bc,#48
+			ldir
+			
+			call	do_copy
+			ld	hl,#drive_vectors
+			ld	de,#0xBC77
+			ld	bc,#48
+			ldir
+			pop	af
+			pop	hl
+			ld	(hl),a
+			pop	iy
+			xor	a
+			ret
+do_copy:
+			ld	hl,#filename2
+			call	get_drive
+			sla	a
+			sla 	a
+			ld	c,a
+			
+			; check if there is a destination filename
+			push	hl
+			call	strlen
+			cp	#2
+			jr	nz, got_dest_fn
+			inc	hl
+			ld	a,(hl)
+			cp	#':'		;  is it just a drive letter?
+			jr	nz, got_dest_fn
+			inc	hl
+			ex	de,hl	
+			
+			ld	hl,#filename
+			inc	hl
+			ld	a,(hl)
+			dec	hl
+			cp	#':'
+			jr	nz, copy_fn
+			inc	hl
+			inc	hl
+copy_fn:
+			call	strlen
+			push	bc
+			inc	a
+			ld	c,a
+			ld	b,#0
+			ldir				; filename1 past ?: to filename2 past ?:
+			pop	bc			; c contains 'dest drive'
+got_dest_fn:	pop	de			; filename2
+			ld	hl,#filename
+			call	get_drive
+			or	c
+			call	set_drives
+			; check if wildcard in src file name
+			ld	hl,#filename
+			inc	hl
+			ld	a,(hl)
+			dec	hl
+			cp	#':'
+			jr	nz,no_drv_letter
+			inc	hl
+			inc	hl
+no_drv_letter:	
+			ld	a,(hl)
+			cp	#'*'
+			jp	nz,no_wildcard
+			push	hl			; filename1
+			;ld	a,#1
+			;call	bios_set_message
+			ld	de,#catalog_buffer
+			push	de			; cas buffer
+			call	cas_catalog
+			pop	hl			; cas buffer
+			pop	de			; filename1
+			;jp	c, copy_error
+			
+copy_files:	push	hl		; catalog buffer
+			ld	a,(hl)
+			cp	#0xFF
+			jr	z, valid_file
+			pop	hl
+			ret	
+valid_file:			
+			inc	hl
+			ld	bc,#8
+			push	de		; filename1
+			ldir
+			ld	a,#0x2e
+			ld	(de),a
+			inc	de
+			ld	bc,#3
+			ldir
+			xor	a
+			ld	(de),a
+			pop	de		; filename 1
+			ld	hl,#filename2
+			inc	hl
+			ld	a,(hl)
+			dec	hl
+			cp	#':'
+			jr	nz,no_drvl
+			inc	hl
+			inc	hl
+no_drvl:		ex	de,hl
+			ld	bc,#14
+			push	hl
+			ldir			; copy filename1+?: to filename2+?:
+			ld	hl,#filename
+			ld	de,#filename2
+			call	copy_file2
+			pop	de		; filename1+?:
+			pop	hl		; ptr cas_catalog buffer
+			ld	bc,#14
+			add	hl,bc
+			jp	copy_files
+no_wildcard:
+			ld	hl,#filename
+			ld	de,#filename2
+			call	copy_file2
+			ret
+
+;	input 
+;	HL = filename
+; 	output
+;	A = drive 0/1/2
+;    HL = filename (after T if stated)
+
+
+get_drive:	push	bc
+			ld	c,#0			; drive 'sd'
+			inc	hl
+			ld	a,(hl)
+			dec	hl
+			cp	#':'
+			jr	nz, get_drive_exit
+			ld	a,(hl)
+			and	#0xDF 
+			cp	#'B'
+			jr	nz, not_b
+			ld	c,#2			; drive b
+			jr	get_drive_exit
+not_b:		cp	#'A'
+			jr	nz, not_a
+			ld	c,#1			; drive a
+			jr	get_drive_exit
+not_a:		cp	#'C'
+			jr	nz, not_c		; drive C (SD)
+			ld	c,#0
+			jr 	get_drive_exit
+not_c:		cp	#'T'			; drive T (TAPE)
+			jr	nz, get_drive_exit
+			ld	c,#3
+get_drive_exit:	
+		
+			ld	a,c
+			pop	bc
+			ret
+			; input A :
+			; 0000 = SD->SD
+			; 0001 A->SD
+			; 0010 B->SD
+			; 0011 TAPE->SD 
+			; 0100  SD->A
+			; 0101  A->A
+			; 0110  B->A
+			; 0111 TAPE->A  (not supported)
+			; 1000  SD->B
+			; 1001  A->B
+			; 1010  B->B
+			; 1011  TAPE->B  (not supported)
+			; 1100  SD->TAPE  
+			; 1101  A->TAPE  (not supported)
+			; 1110  B->TAPE  (not supported)
+			; 1111  TAPE->TAPE  (not supported)
+set_drives:	cp	#0
+			jp	z, patch_fio
+			cp	#1
+			jr	nz, not_ASD
+			call	set_amsdos_functions
+			call	set_drvA
+			jp	patch_fio_out
+not_ASD:		
+			cp	#2
+			jr	nz,not_BSD
+			call	set_amsdos_functions
+			call	set_drvB
+			jp	patch_fio_out
+
+not_BSD:		cp	#3
+			jr	nz,not_TSD
+			call	tape
+			jp	patch_fio_out
+not_TSD:		cp	#4
+			jr	nz, not_SDA
+			call	set_amsdos_functions
+			call	set_drvA
+			jp	patch_fio_in
+not_SDA:		cp	#5
+			jr	nz, not_AA
+			call	set_amsdos_functions
+			jp	drvA
+not_AA:		cp	#6
+			jp	nz, not_BA
+			call	set_amsdos_functions
+			jp	drvB
+not_BA:		cp	#7
+			jr	nz, not_TA
+			call	set_amsdos_functions
+			call	set_drvA
+			jp	tape		; _in
+not_TA:		cp	#8
+			jr	nz, notSDB
+			call	set_amsdos_functions
+			call	set_drvB
+			jp	patch_fio_in
+notSDB:		cp	#9
+			jr	nz, not_AB
+			call	set_amsdos_functions
+			jp	drvA
+not_AB:		cp	#10
+			jr	nz, not_BB
+			call	set_amsdos_functions
+			jp	drvB
+not_BB:		cp	#11
+			jr	nz, not_TB
+			call	set_amsdos_functions
+			call	set_drvB
+			jp	tape		;_in
+not_TB:		cp	#12			
+			jr	nz, not_SDT
+			call	patch_fio_in
+			jp	tape		; _out
+not_SDT:		cp	#13
+			jr	nz, notAT
+			call	set_amsdos_functions
+			call	set_drvA
+			jp	tape		; _out
+notAT:		cp	#14
+			jr	nz,notBT
+			call	set_amsdos_functions
+			call	set_drvB
+			jp	tape		;_out
+notBT:		cp	#15
+			jp	z,tape
+			ret
+			
+			; hl = src filename
+			; de = dest filename
+copy_file2:	push	hl
+			ld	hl,#txt_copying
+			call	disp_msg
+			ld	hl,#filename
+			call	disp_msg
+			ld	hl,#txt_to
+			call	disp_msg
+			ld	hl,#filename2
+			call	disp_msg
+			call	crlf
+			pop	hl
+			push	de
+			call	strlen
+			ld	b,a
+			ld	de,#inbuffer
+			
+			call cas_in_open
+			jr	c,cas_in_ok
+			pop	de
+			jp	copy_error
+cas_in_ok:			
+			push	bc
+			
+			push	hl
+			ld	de,#header		
+			ld	bc,#128
+			ldir				
+			pop	hl
+			ld	de,#-5
+			add	hl,de
+			ld	(#fileheadin),hl
+			
+			pop	hl
+			ld	(#filesize),hl
+			pop	hl			; dest filename
+			push	af			; filetype
+			call	strlen
+			ld	b,a
+			ld	de,#outbuffer
+			call	cas_out_open
+			jr	c,openout_ok
+			pop	af
+			jp	copy_error		
+openout_ok:
+			ld	de,#-5
+			add	hl,de
+			ld (#fileheadout),hl
+			
+			pop	af
+		
+			cp	#0x16
+			jr	nz, has_header
+headerless:			
+			call	cas_in_char
+			jp	c, copy_more
+			cp	#0xf
+			jp	z,copy_done
+copy_more:	call	cas_out_char
+			jr	headerless
+has_header:			
+			call	cas_in_char		; fill 2k buffer
+			
+			ld	hl,#header
+			ld	a,(hl)
+			call cas_out_char
+			ld	de,#outbuffer
+			ld	bc,#128
+			ldir
+			ld	hl,#inbuffer
+			ld	bc,#2048-128
+			ldir
+		
+			; check if remains of file is less than 2k - 128
+			ld	hl,(filesize)
+			ld	de,#128
+
+			add	hl,de
+			ld	bc,#0xF800			; -#0x800
+			push	hl
+			add	hl,bc				; and substract chunksize
+			pop	de
+			jr	c, cfull_chunk
+			ld	c,e
+			ld	b,d
+			jr	cont1
+			
+cfull_chunk:	ld	bc,#0x800
+			jr	cont1
+
+cont1:		ld	(filesize),hl
+						
+			; increase ptr to write out 2k buffer (or filesize) at once
+			
+			ld	iy,(fileheadout)
+			ld	(iy),#1
+			
+			ld	l,1(iy)		; get buffer
+			ld	h,2(iy)
+			add	hl,bc
+			ld	3(iy),l		; current pos is end of buffer
+			ld	4(iy),h
+			ld	24(iy),c		; size is 2k too
+			ld	25(iy),b
+			; write 2k block
+			call cas_out_char
+			ld	a,#8
+			cp	b			; was it 2k
+			jp	nz, copy_done
+			
+			; copy remaining bytes of input buffer to output buffer
+copy_loop:		
+			ld	hl,#inbuffer+2048-128
+			ld	de,#outbuffer
+			ld	bc,#128
+			ldir
+			ld	iy,(#fileheadin)
+			
+			ld	hl,(#filesize)
+			ld	bc,#0xF800			; -#0x800
+			push	hl
+			add	hl,bc			; and substract chunksize
+			pop	de
+			jr	c, cfull_chunk1
+			ld	c,e
+			ld	b,d
+			jr	cont2
+			
+cfull_chunk1:	ld	bc,#0x800
+
+		
+			; re-fill input buffer
+		
+cont2:		ld	(filesize),hl
+			
+			ld	l,1(iy)
+			ld	h,2(iy)
+			
+			add	hl,bc
+			ld	3(iy),l		; adjust current pos to end of buffer
+			ld	4(iy),h
+			ld	24(iy),#0	; clear buffer remains
+			ld	25(iy),#0
+			call	cas_in_char		; fill 2k buffer
+			jr	c,read_in_ok
+			cp	#0x1A
+			jr	z,read_in_ok
+			;jp	copy_error
+read_in_ok:
+			push	bc
+			ld	hl,#inbuffer
+			ld	de,#outbuffer+128
+			ld	bc,#2048-128
+			ldir
+			pop	bc
+			
+			; write 2k buf
+			ld	iy,(fileheadout)
+			ld	(iy),#1
+			
+			ld	l,1(iy)		; get buffer
+			ld	h,2(iy)
+			add	hl,bc
+			ld	3(iy),l		; current pos is end of buffer
+			ld	4(iy),h
+			ld	24(iy),c		; size is 2k too
+			ld	25(iy),b
+			
+			call cas_out_char
+			;jr	nc, copy_error
+			ld	a,#8
+			cp	b			; was it 2k
+			jr	z,copy_loop
+			ld	l,3(iy)		; get buffer
+			ld	h,4(iy)
+			dec	hl			; get rid of extra char
+			ld	3(iy),l		
+			ld	4(iy),h		 
+			
+			
+copy_done:			
+			call cas_in_close
+			call cas_out_close
+			ret
+copy_error:	ld	hl,#txt_copy_err
+			call	disp_msg
+			jp	copy_done
 
 disp_hex:		ld	b,a
 			srl	a
@@ -3865,6 +4409,7 @@ amsdos_mode:
 			ld	b,#4
 			jp	pass_to_amsdos
 
+
 			; |A
 			
 drvA:		push	hl
@@ -4026,8 +4571,36 @@ jumper_cont:
 			ld	iy,(0xBE7D)	; Amsdos workspace
 			ld	bc,#0xDF00
 			jp	(hl)			; jump to ram
-
-					
+set_amsdos_functions:
+			push	hl
+			push	de
+			push	bc
+			ld	hl,#tape_functions			
+			ld	de,#0xbc77
+			ld	bc,#48
+			ldir
+			pop	bc
+			pop	de
+			pop	hl
+			ret
+set_drvA:		push	hl
+			push	bc
+			ld	hl,(0xBE7D)
+			ld	bc,#4
+			add	hl,bc
+			ld	(hl),#0
+			pop	bc
+			pop	hl
+			ret			
+set_drvB:		push	hl
+			push	bc
+			ld	hl,(0xBE7D)
+			ld	bc,#4
+			add	hl,bc
+			ld	(hl),#1
+			pop	bc
+			pop	hl
+			ret						
 data_0:		.db	0,1		
 romslots_fn:
 			.ascii "/m4/romslots.bin"
@@ -4066,6 +4639,12 @@ fail_msg:
 miss_arg:
 			.ascii "Missing arguments."
 			.db 10, 13, 0
+txt_copying:	.ascii	"Copy: "
+			.db	0
+txt_to:		.ascii	" -> "
+			.db	0
+txt_copy_err:	.ascii	"Error occurred."
+			.db	10,13,0
 
 text_unkdir:
 			.ascii "Unknown directory."
@@ -4175,8 +4754,8 @@ helper_functions:
 				.dw hreceive
 .org rom_response-0x100
 run_filename:
-				.ds 256			; (256-1) max file+path depth
-						
+				.ds 256 			; (256-1) max file+path depth
+					
 .org rom_response
 				.ds	0xC00
 .org	rom_config
@@ -4211,7 +4790,7 @@ sock_info:	.ds	80	; 5 socket status structures (0 is used for gethostbyname*, 1-
 ; *for socket 0, gethostbyname, status will be set to 5 when in progress and back to 0, when done.
 
 .org	rom_table
-			.dw	#0x110	; rom version
+			.dw	#0x201	; rom version
 			.dw	rom_response
 			.dw	rom_config
 			.dw	sock_info

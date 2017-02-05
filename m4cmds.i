@@ -50,6 +50,8 @@ C_NETBIND						.equ 0x4338
 C_NETLISTEN					.equ 0x4339
 C_NETACCEPT					.equ 0x433A
 C_GETNETWORK					.equ 0x433B
+C_WIFIPOW						.equ	0x433C
+
 C_CONFIG						.equ 0x43FE
 
 C_WRITE_COC					.equ 0x4343
