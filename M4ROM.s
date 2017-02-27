@@ -67,6 +67,7 @@ ACKPORT						.equ 0xFC00
 			jp	LongName		; |UDIR		0xC078
   			jp	wifi_power
   			jp	file_copy
+  			jp	m4help
 rsx_commands:
 			.ascis "M4 BOARD"	
 			.ascis "SD"
@@ -109,7 +110,9 @@ rsx_commands:
 			.ascis "LONGNAME"
 			.ascis "WIFI"
 			.ascis "FCP"
+			.ascis "M4HELP"
 			.db 0
+
 
 ; work space map
 ; 000-073 : Amsdos openin header (if amsdos not present, otherwise use amsdos cas_in_header)
@@ -612,7 +615,24 @@ checksum_ok:
 			ld	hl,#128	; ignore rest of header (unused)
 			ld	a,#1
 			call	fseek
-		
+			; get protection flag
+;			ld	l,#0
+;			ld	a,18(iy)
+;			and	#1
+;			cp	#0
+;			jr	z,no_prot
+;			inc	l
+;no_prot:
+;			ld	a,(basic_ver)	; version
+;			cp	#0		; is basic 1.0
+;			ld	a,l
+;			jr	nz,notpbasic10
+;			ld	(#0xAE45),a
+;			jr	pflag_set
+;notpbasic10:	
+;			ld	(#0xAE2C),a
+;pflag_set:	
+			
 			pop	hl
 			pop	de	; b =filename len
 			pop	de	; 2k buffer or 0
@@ -673,21 +693,21 @@ _cas_in_abandon:
 			sbc	a,a
 			ret
 
-C_SDEBUG .equ 0x43FF
-debug:		push bc
-			push af
-			ld	bc,#DATAPORT				; data out port
-			out (c),c
-			ld	a,#C_SDEBUG
-			out	(c),a						; command lo
-			ld	a,#C_SDEBUG>>8
-			out	(c),a						; command	hi
-			pop	af
-			out	(c),a	
-			ld	bc,#ACKPORT
-			out (c),c							
-			pop bc
-			ret			
+;C_SDEBUG .equ 0x43FF
+;debug:		push bc
+;			push af
+;			ld	bc,#DATAPORT				; data out port
+;			out (c),c
+;			ld	a,#C_SDEBUG
+;			out	(c),a						; command lo
+;			ld	a,#C_SDEBUG>>8
+;			out	(c),a						; command	hi
+;			pop	af
+;			out	(c),a	
+;			ld	bc,#ACKPORT
+;			out (c),c							
+;			pop bc
+;			ret			
 ; ------------------------- cas_in_char replacment BC80 
 _cas_in_char:
 			push	hl
@@ -1027,8 +1047,9 @@ clr_head:
 			dec	hl	; HL points to AMSDOS header
 			pop	iy
 			ld	a,#0xff
-			or	a	; z = 0
 			scf		; c = 1
+			sbc	a,a
+		
 			ret
 ; ------------------------- cas_out_char  replacement	BC95
 ; -- parameters
@@ -2882,6 +2903,15 @@ disp_msg:		ld 	a, (hl)
 			call txt_output
 			inc	hl
 			jr	disp_msg
+
+disp_msg2:	ld 	a, (hl)
+			or	a
+			ret	z
+			and	#0x7F		; no funny chars
+			call txt_output
+			inc	hl
+			jr	disp_msg2
+			
 			
 			; cursor copy function for basic 1.0, may remove later if space needed now you can replace lowerrom and use basic 1.1
 			
@@ -3488,6 +3518,8 @@ filename		.equ	0x9906
 filename2		.equ	0x9986
 header		.equ	0x9A06
 drive_vectors	.equ	0x9A86	; to 0x9AB6
+
+
 file_copy:		
 			cp	#2			; 2 arguments?	
 			jr	z,got_args
@@ -3594,6 +3626,13 @@ got_dest_fn:	pop	de			; filename2
 			dec	hl
 			cp	#':'
 			jr	nz,no_drv_letter
+			ld	a,(hl)
+			and	#0xDF
+			cp	#'A'
+			call	z,set_drvA
+			
+			cp	#'B'
+			call	z,set_drvB
 			inc	hl
 			inc	hl
 no_drv_letter:	
@@ -3786,11 +3825,11 @@ copy_file2:	push	hl
 			ld	hl,#txt_copying
 			call	disp_msg
 			ld	hl,#filename
-			call	disp_msg
+			call	disp_msg2
 			ld	hl,#txt_to
 			call	disp_msg
 			ld	hl,#filename2
-			call	disp_msg
+			call	disp_msg2
 			call	crlf
 			pop	hl
 			push	de
@@ -3810,13 +3849,23 @@ cas_in_ok:
 			ld	bc,#128
 			ldir				
 			pop	hl
+			push	hl
+			push	af
+			ld	de,#18
+			and	#0xFE
+			add	hl,de
+			ld	(hl),a		; remove P flag if present, to avoid "decryption"
+			pop	af
+			pop	hl
 			ld	de,#-5
 			add	hl,de
 			ld	(#fileheadin),hl
 			
 			pop	hl
+			ld	hl,(#header+24)
 			ld	(#filesize),hl
 			pop	hl			; dest filename
+			
 			push	af			; filetype
 			call	strlen
 			ld	b,a
@@ -3841,8 +3890,7 @@ headerless:
 			jp	z,copy_done
 copy_more:	call	cas_out_char
 			jr	headerless
-has_header:			
-			call	cas_in_char		; fill 2k buffer
+has_header:	call	cas_in_char		; fill 2k buffer
 			
 			ld	hl,#header
 			ld	a,(hl)
@@ -3866,6 +3914,7 @@ has_header:
 			jr	c, cfull_chunk
 			ld	c,e
 			ld	b,d
+			dec	bc					; get rid of extra char
 			jr	cont1
 			
 cfull_chunk:	ld	bc,#0x800
@@ -4583,24 +4632,61 @@ set_amsdos_functions:
 			pop	de
 			pop	hl
 			ret
-set_drvA:		push	hl
+set_drvA:		push	af
+			push	hl
 			push	bc
 			ld	hl,(0xBE7D)
-			ld	bc,#4
-			add	hl,bc
 			ld	(hl),#0
 			pop	bc
 			pop	hl
+			pop	af
 			ret			
-set_drvB:		push	hl
+set_drvB:		push	af
+			push	hl
 			push	bc
 			ld	hl,(0xBE7D)
-			ld	bc,#4
-			add	hl,bc
 			ld	(hl),#1
 			pop	bc
 			pop	hl
+			pop	af
 			ret						
+m4help:		ld	hl,#rsx_commands
+			call	disp_rsx_cmd
+			call	crlf
+			call	crlf
+m4helploop:	ld	a,(hl)
+			cp	#0
+			jp	z,crlf
+			call	disp_rsx_cmd
+			and	#0x7f
+			cp	#32
+			ld	a,#10
+			push	hl
+			call	nc, txt_set_column		
+			pop	hl
+			ld	a,(hl)
+			cp	#0
+			jp	z,crlf
+			call	disp_rsx_cmd
+			and	#0x7f
+			cp	#32
+			call	nc,crlf
+			jr	m4helploop
+disp_rsx_cmd:
+			ld	a,(hl)
+			inc	hl
+			
+			push	af
+			and	#0x7F
+			cp	#32
+			call	nc, txt_output
+
+			pop	af
+			bit	#7,a
+			ret	nz
+			jr	disp_rsx_cmd
+
+
 data_0:		.db	0,1		
 romslots_fn:
 			.ascii "/m4/romslots.bin"
@@ -4750,8 +4836,15 @@ amsdos_table07:
 jump_vec2:	.dw	load_autoexec	; 10
 			
 helper_functions:
-				.dw hsend
-				.dw hreceive
+				.dw	hsend
+				.dw	hreceive
+				.dw	fopen
+				.dw	fread
+				.dw	fwrite
+				.dw	fclose
+				.dw	fseek
+				;.dw	fsize
+				
 .org rom_response-0x100
 run_filename:
 				.ds 256 			; (256-1) max file+path depth
@@ -4790,12 +4883,13 @@ sock_info:	.ds	80	; 5 socket status structures (0 is used for gethostbyname*, 1-
 ; *for socket 0, gethostbyname, status will be set to 5 when in progress and back to 0, when done.
 
 .org	rom_table
-			.dw	#0x201	; rom version
+			.dw	#0x202	; rom version
 			.dw	rom_response
 			.dw	rom_config
 			.dw	sock_info
 			.dw	helper_functions
 			.dw	run_filename
+			.dw	tape_functions
 	
 .org	0xFFFF
 			.db	0xFF	
