@@ -1,5 +1,5 @@
 			; M4 Board cpc z80 rom
-			; Written by Duke, 2016
+			; Written by Duke, 2016/2017
 			; www.spinpoint.org
 			
 FR_OK				.equ 0
@@ -29,3 +29,4 @@ FA_WRITE						.equ	2
 FA_CREATE_NEW					.equ 4
 FA_CREATE_ALWAYS				.equ 8
 FA_OPEN_ALWAYS					.equ 16
+FA_REALMODE					.equ 128

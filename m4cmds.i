@@ -1,5 +1,5 @@
 			; M4 Board cpc z80 rom
-			; Written by Duke, 2016
+			; Written by Duke, 2016/2017
 			; www.spinpoint.org
 
 C_OPEN						.equ 0x4301
@@ -39,6 +39,7 @@ C_ROMSUPDATE					.equ	0x432B
 C_ROMLIST						.equ	0x432C
 C_CMDRBTRUN					.equ	0x432D
 
+
 C_NETSOCKET					.equ 0x4331
 C_NETCONNECT					.equ 0x4332
 C_NETCLOSE					.equ 0x4333
@@ -52,6 +53,8 @@ C_NETACCEPT					.equ 0x433A
 C_GETNETWORK					.equ 0x433B
 C_WIFIPOW						.equ	0x433C
 
+C_ROMCP						.equ 0x43FC
+C_ROMWRITE					.equ	0x43FD
 C_CONFIG						.equ 0x43FE
 
 C_WRITE_COC					.equ 0x4343

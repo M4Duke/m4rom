@@ -1,6 +1,6 @@
 			
 			; M4 Board cpc z80 rom
-			; Written by Duke, 2016
+			; Written by Duke, 2016/2017
 			; www.spinpoint.org
 			
 			.module cpc
@@ -11,7 +11,10 @@
 			.include "m4cmds.i"
 
 rom_response					.equ	0xE800
+m4_workspace 					.equ rom_response+0xA00
+snamem 						.equ rom_response+0xB00
 rom_config					.equ rom_response+0xC00
+
 sock_status					.equ	0xFE00
 rom_table						.equ	0xFF00
 UDIR_RAM_Address 				.equ 0xBEA3
@@ -68,6 +71,7 @@ ACKPORT						.equ 0xFC00
   			jp	wifi_power
   			jp	file_copy
   			jp	m4help
+  			jp	snaload
 rsx_commands:
 			.ascis "M4 BOARD"	
 			.ascis "SD"
@@ -111,6 +115,7 @@ rsx_commands:
 			.ascis "WIFI"
 			.ascis "FCP"
 			.ascis "M4HELP"
+			.ascis "SNA"
 			.db 0
 
 
@@ -258,6 +263,23 @@ init_plus:	ld	hl,#0
 init_msg:
 			.ascii " M4 Board V2.0"
 			.db 10, 13, 10, 13, 0
+				
+			; ------------------------- strncmp
+			; -- parameters:
+			; -- HL = string 1
+			; -- DE = string 2
+			; -- b = len
+			; -- return:
+			; -- A = 0 == match
+
+strncmp:		ld	a,(de)
+			xor	(hl)
+			ret	nz
+			inc	hl
+			inc	de
+			djnz	strncmp
+			ret
+			
 
 			; ------------------------- strlen
 			; -- parameters:
@@ -538,6 +560,10 @@ checksum_loop:
 			add	hl,bc
 			pop	bc
 			djnz	checksum_loop
+			ld	e,cas_size_l(iy)
+			ld	c,cas_size_h(iy)
+			ld	d,#0
+			ld	b,#0
 			
 			ld	cas_size_l(iy),#0			;	
 			ld	cas_size_h(iy),#0			;	size
@@ -611,7 +637,13 @@ clear_loop:
 			pop	iy
 			ret
 	
-checksum_ok:	
+checksum_ok:	or	a
+			sbc	hl,bc
+			or	a
+			sbc	hl,de
+			ld	67(iy),l
+			ld	68(iy),h
+			
 			ld	hl,#128	; ignore rest of header (unused)
 			ld	a,#1
 			call	fseek
@@ -694,19 +726,14 @@ _cas_in_abandon:
 			ret
 
 ;C_SDEBUG .equ 0x43FF
-;debug:		push bc
-;			push af
-;			ld	bc,#DATAPORT				; data out port
+;debug:		ld	bc,#DATAPORT				; data out port
 ;			out (c),c
-;			ld	a,#C_SDEBUG
-;			out	(c),a						; command lo
-;			ld	a,#C_SDEBUG>>8
-;			out	(c),a						; command	hi
-;			pop	af
+;			ld	de,#C_SDEBUG
+;			out	(c),e
+;			out	(c),d
 ;			out	(c),a	
 ;			ld	bc,#ACKPORT
 ;			out (c),c							
-;			pop bc
 ;			ret			
 ; ------------------------- cas_in_char replacment BC80 
 _cas_in_char:
@@ -1644,6 +1671,41 @@ autoexec1:
 			call	send_command_iy
 			pop	hl
 			call	strlen
+			
+			; check if SNA file
+			push	hl
+			push	af
+			cp	#5		; does it even have room for SNA extension?
+			jr	c, not_sna_file
+			
+			ld	e,a
+			ld	d,#0
+			add	hl,de	
+			dec	hl
+			ld	a,(hl)
+			and	#0xDF
+			xor	#'A'
+			jr	nz,not_sna_file
+			dec	hl
+			ld	a,(hl)
+			and	#0xDF
+			cp	#'N'
+			jr	nz,not_sna_file
+			dec	hl
+			ld	a,(hl)
+			and	#0xDF
+			cp	#'S'
+			jr	nz,not_sna_file
+			dec	hl
+			ld	a,(hl)
+			cp	#'.'
+			jr	nz,not_sna_file
+			pop	af
+			pop	hl            
+			jp	snaload_str_hl
+not_sna_file:
+			pop	af
+			pop	hl
 			add	#3
 			ld	c,#0x80 | FA_READ
 			
@@ -2715,7 +2777,6 @@ sendloop:		inc	b
 		
 			ld	bc,#ACKPORT
 			out (c),c
-			xor	a
 			ret
 			
 send_command_iy:
@@ -3914,7 +3975,7 @@ has_header:	call	cas_in_char		; fill 2k buffer
 			jr	c, cfull_chunk
 			ld	c,e
 			ld	b,d
-			dec	bc					; get rid of extra char
+			;dec	bc					; get rid of extra char
 			jr	cont1
 			
 cfull_chunk:	ld	bc,#0x800
@@ -3938,7 +3999,7 @@ cont1:		ld	(filesize),hl
 			call cas_out_char
 			ld	a,#8
 			cp	b			; was it 2k
-			jp	nz, copy_done
+			jp	nz, _copy_done
 			
 			; copy remaining bytes of input buffer to output buffer
 copy_loop:		
@@ -4003,14 +4064,14 @@ read_in_ok:
 			ld	a,#8
 			cp	b			; was it 2k
 			jr	z,copy_loop
+_copy_done:			
 			ld	l,3(iy)		; get buffer
 			ld	h,4(iy)
 			dec	hl			; get rid of extra char
 			ld	3(iy),l		
-			ld	4(iy),h		 
+			ld	4(iy),h	
 			
-			
-copy_done:			
+copy_done:		 		
 			call cas_in_close
 			call cas_out_close
 			ret
@@ -4685,7 +4746,383 @@ disp_rsx_cmd:
 			bit	#7,a
 			ret	nz
 			jr	disp_rsx_cmd
+			
+			; ------------------------- SNA - Run snapshot file
+			
+snaload:		cp	#1
+			jp	nz, sna_error
+			; get string
+			ld	l,(ix)
+			ld	h,1(ix)
+			ld	a,(hl)	; string len
+			inc	hl
+			ld	e,(hl)	; string ptr lo
+			inc	hl
+			ld	d,(hl)	; string ptr hi
+			ex	de,hl
 
+snaload_str_hl:
+			add	#3
+			ld	c,#FA_READ
+			ld	de, #C_OPEN
+			call	send_command2
+			ld	hl,#rom_response+3
+			ld	b,(hl)		; fd
+			inc	hl
+			ld	a,(hl)		; res
+			cp	#0
+			jp	nz, sna_error
+			ld	a,b
+			
+			; read sna header
+			
+			ld	iy,(#rom_workspace)
+			ld	(iy),#5				; packet size, cmd (2), fd (1), size (2)
+			ld	1(iy),#C_READ
+			ld	2(iy),#C_READ>>8
+			ld	3(iy),a				; fd
+			
+			ld	4(iy),#0				; chunk size low
+			ld	5(iy),#0x1			; chunk size high
+			call	send_command_iy	; send read command packet
+			ld	hl,#rom_response+3	; src buffer
+			ld	a,(hl)			; check result
+			cp	#0
+			jp	nz, sna_error
+			inc	hl
+		
+			
+		
+			; check if valid string
+			
+			push	hl
+			ld	de,#txt_sna_id
+			ld	b,#8
+			call	strncmp
+			pop	hl
+			jr	z, valid_sna
+			ld	hl,#txt_sna_err
+			jp	disp_msg
+				
+valid_sna:			
+			di
+			
+			;  and copy to snamem, 0x100 bytes
+			
+			
+			ld	bc,#DATAPORT				; data out port
+			out (c),c
+			ld	de,#C_ROMCP
+			out	(c),e						; command lo
+			out	(c),d						; command	hi
+			ld	de,#snamem
+			out	(c),e						; rom dest addr lo
+			out	(c),d						; rom dest addr hi
+			xor	a
+			out	(c),a						; src rom bank (0 = m4)
+			
+			out	(c),l						; rom src addr lo
+			out	(c),h						; rom src addr hi
+			xor	a							; dest rom bank (0 = m4)
+			out	(c),a
+			
+			ld	de,#0x100
+			out	(c),e						; size lo
+			out	(c),d						; size hi
+			ld	bc,#ACKPORT
+			out (c),c							; tell M4 that command has been send
+		
+			
+			; prepare a read packet & close packet 
+			
+			ld	a,3(iy)				; restore fd
+			
+			ld	(iy),#5				; packet size, cmd (2), fd (1), size (2)
+			ld	1(iy),#C_READ
+			ld	2(iy),#C_READ>>8
+			ld	3(iy),a				; fd
+			ld	4(iy),#0				; chunk size low
+			ld	5(iy),#0x8			; chunk size high
+			
+			ld	6(iy),#3				; size - cmd(2) + fd(1)
+			ld	7(iy),#C_CLOSE			; close cmd
+			ld	8(iy),#C_CLOSE>>8		; close cmd
+			ld	9(iy),a				; fd
+			
+			
+			ld	hl,(#rom_workspace)
+			ld	de,#m4_workspace
+			ld	bc,#10
+			call	 rom_write			; copy it into our rom, so we dont need RAM to read the .sna file
+	
+			; build exit & jump memory
+			
+			ld	(iy),#0xED			; out (c),c
+			ld	1(iy),#0x49
+			ld	2(iy),#0xF1			; pop af
+			ld	hl,(#snamem+0x21)		; get SP
+			ld	3(iy),#0x31			; ld sp,xxxx
+			ld	4(iy),l
+			ld	5(iy),h
+			ld	hl,(#snamem+0x13)		; get bc
+			ld	6(iy),#0x01			; ld bc,xxxx
+			ld	7(iy),l
+			ld	8(iy),h
+			ld	9(iy),#0xFB			; ei
+			ld	a,(#snamem+0x1B)
+			and	#1
+			jr	nz,int_en
+			ld	9(iy),#0xF3			; di
+int_en:
+			ld	hl,(#snamem+0x23)		; get PC
+			ld	10(iy),#0xC3			; jp xxxx
+			ld	11(iy),l
+			ld	12(iy),h
+			ld	hl,(#snamem+0x11)		; get AF
+			ld	13(iy),l
+			ld	14(iy),h
+			
+			ld	hl,(#rom_workspace)
+			ld	de,#sna_jumper
+			ld	bc,#15
+			call	 rom_write	
+			
+			
+			; read first 64 KB data
+			
+		
+			ld	a,#65536/2048
+			ld	de,#0
+sna_read64k:	exx
+			ld	hl, #m4_workspace
+			ld	bc,#DATAPORT				; FE data out port
+			ld	d,(hl)						; size
+			inc	d
+sna1sendloop:	inc	b
+			outi
+			dec	d
+			jr	nz, sna1sendloop
+			
+			ld	bc,#ACKPORT
+			out (c),c
+			exx
+			ld	hl, #rom_response+4
+			ld	bc, #0x800
+			ldir
+			dec	a
+			jr	nz, sna_read64k
+			
+			
+			ld	a,(#snamem+0x6b)
+			cp	#64
+			jr	z, sna_loaded
+			
+			; read bank 1-4
+			
+			ex	af,af'
+			ld	a,#0xC4
+			
+sna_bank_loop:			
+			ld	bc,#0x7F00
+			out	(c),a
+			
+			ex	af,af'
+			ld	a,#16384/2048
+			ld	de,#0x4000
+sna_read16k:	exx
+			ld	hl, #m4_workspace
+			ld	bc,#DATAPORT				; FE data out port
+			ld	d,(hl)						; size
+			inc	d
+sna2sendloop:	inc	b
+			outi
+			dec	d
+			jr	nz, sna2sendloop
+			
+			ld	bc,#ACKPORT
+			out (c),c
+			exx
+			ld	hl, #rom_response+4
+			ld	bc, #0x800
+			ldir
+			dec	a
+			jr	nz, sna_read16k
+			ex	af,af'
+			inc	a
+			cp	#0xC8
+			jr	nz, sna_bank_loop
+			
+sna_loaded:	; close the .sna file
+			ld	hl, #m4_workspace+6
+			ld	bc,#DATAPORT
+			ld	d,(hl)
+			inc	d
+snaclose_loop:	inc	b
+			outi
+			dec	d
+			jr	nz, snaclose_loop
+			ld	bc,#ACKPORT
+			out (c),c
+			
+			; -----------------------------------------
+			
+			; Gate Array setup, CRTC setup & AY SETUP
+			; Written by Grim/Arkos, taken from SNARKOS v1.3
+			
+			; Setup pen colors 0 to 15 and border color
+			ld	hl,#snamem+0x2F+16
+			ld	bc,#0x7F10
+SNA_SetupGA:	out (c),c
+			ld	a,(hl)
+			dec	hl
+			set	6,a
+			out	(c),a
+			dec	c
+			jr	nz,SNA_SetupGA
+			
+			; Select last active pen
+			ld	a,(hl)
+			out	(c),a  
+
+
+
+			; CRTC setup
+			ld	hl,#snamem+0x43+17
+			ld	bc,#0xBD00+17
+SNA_SetupCRTC:
+			dec	b
+			out	(c),c
+			ld	b,#0xBE
+			outd
+			dec	c
+			jp	p,SNA_SetupCRTC
+			; Select active CRTC register
+			; HL = Offset &42
+			; B  = &BD
+			outd
+			
+			; ram config
+				
+			ld	a,(#snamem+0x41)
+			or	#0xC0
+			ld	bc,#0x7f00
+			out	(c),a
+	
+			; Setup AY3 registers
+
+			ld	hl,#snamem+0x5B+15
+			ld	a,#15
+SNA_SetupAY3:
+			ld	bc,#0xF4C0
+			out	(c),a
+			ld	b, #0xF6
+			out (c),c
+			.db	0xED, 0x71
+			dec	b
+			outd
+			ld	bc,#0xF680
+			out (c),c
+			.db	0xED, 0x71
+			dec	a
+			jp	p,SNA_SetupAY3
+			; Select last active AY3 register
+			ld	bc,#0xF5C0
+			outd
+			ld	b,#0xF6
+			out	(c),c
+			.db	0xED, 0x71
+			
+			; -----------------------------------------
+			
+			; set interrupt mode
+			
+			ld	a,(#snamem+0x25)
+			cp	#0
+			jr	nz, not_im0
+			im	0
+not_im0:		cp	#1
+			jr	nz, not_im1
+			im	1
+not_im1:		cp	#2
+			jr	nz, not_im2
+			im	2
+not_im2:			
+			; put jumper in ram aswell, for the switch
+			
+			ld	hl,#sna_jumper
+			ld	e,l
+			ld	d,h
+			ld	bc,#0x10
+			ldir
+			
+			; pop registers
+			
+			exx
+			ex	af, af'
+			ld	sp,#snamem+0x26
+			pop	af
+			pop	bc
+			pop	de
+			pop	hl
+			ex	af, af'
+			exx
+			
+			ld	sp,#snamem+0x15
+			pop	de
+			pop	hl
+			ld	a,(#snamem+0x1A)	
+			ld	i,a
+			
+			ld	sp,#snamem+0x1d
+			pop	ix
+			pop	iy
+
+			
+			ld	a,(#snamem+0x40)
+			ld	c,a
+			ld	b,#0x7F
+			
+			ld	sp,#sna_jumper+0xD
+			jp	sna_jumper
+sna_error:
+			ld	hl,#txt_copy_err
+			jp	disp_msg
+			
+			; hl = src ram addr
+			; de = rom dest addr
+			; bc = size
+			
+rom_write:	push	af
+			push bc
+			push	de
+			
+			xor	a
+			ld	bc,#DATAPORT					; data out port
+			out (c),c
+			ld	de,#C_ROMWRITE
+			out	(c),e						; command lo
+			out	(c),d						; command	hi
+			pop	de
+			out	(c),e						; rom dest addr
+			out	(c),d						; rom dest addr
+			pop	de
+			out	(c),e						; size
+			out	(c),d						; size
+			out	(c),e						; bank (0 = M4 ROM) 
+rom_wrt_loop:	inc	b
+			outi
+			dec	de
+			cp	e
+			jr	nz, rom_wrt_loop
+			cp	d
+			jr	nz, rom_wrt_loop
+			
+			ld	bc,#ACKPORT
+			out (c),c							; transfer!
+			pop	af
+			ret
+					
+			
 
 data_0:		.db	0,1		
 romslots_fn:
@@ -4761,6 +5198,10 @@ text_not_found:
 text_break:	.db	10,13
 			.ascii "*Break*"
 			.db	10,13,0
+txt_sna_err:	.ascii "Not valid SNA file!"
+			.db	10,13,0
+txt_sna_id:	.ascii "MV - SNA"
+
 ff_error_map:
 			.db 0x0	;FR_OK				0
 			.db 0xFF	;FR_DISK_ERR			1
@@ -4845,9 +5286,11 @@ helper_functions:
 				.dw	fseek
 				;.dw	fsize
 				
+
+				
 .org rom_response-0x100
 run_filename:
-				.ds 256 			; (256-1) max file+path depth
+				.ds	256 			; (256-1) max file+path depth
 					
 .org rom_response
 				.ds	0xC00
@@ -4890,7 +5333,10 @@ sock_info:	.ds	80	; 5 socket status structures (0 is used for gethostbyname*, 1-
 			.dw	helper_functions
 			.dw	run_filename
 			.dw	tape_functions
-	
+         
+; SNA rom/ram switching, similar to SNArkos
+.org	0xFFF0
+sna_jumper:
 .org	0xFFFF
 			.db	0xFF	
 .AREA _DATA
