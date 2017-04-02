@@ -69,7 +69,7 @@ ACKPORT						.equ 0xFC00
 			jp	GETPATH		; |UDIR		0xC075
 			jp	LongName		; |UDIR		0xC078
   			jp	wifi_power
-  			jp	file_copy
+  			jp	fcp
   			jp	m4help
   			jp	snaload
 rsx_commands:
@@ -538,13 +538,35 @@ open_ok:
 
 			; read first 128 bytes and check if its using AMSDOS header
 			
-			ld	iy,(#amsdos_inheader)
-			push	iy
-			pop	de					; DE address =  ptr to amsdos header
-			ld	hl,#69				; size of header
+			ld	de,(#amsdos_inheader)
+			
+			ld	a,(amsdos_ver)
+			cp	#0
+			jr	z, no_amsdos_rom
+			
+			; read to "buffer area"
+			
+			ld	hl,#0xE4-0x55
+			add	hl,de
+			ex	de,hl
+			ld	hl,#128			; size of header
 			ld	a,#1					; fd
 			call	fread
 			
+			; copy to real location
+			
+			ld	hl,(#amsdos_inheader)
+			ex	de,hl
+			ld	bc,#69
+			push	de
+			ldir
+			pop	de
+			jr	check_head
+no_amsdos_rom:			
+			ld	hl,#69				; size of header
+			ld	a,#1					; fd
+			call	fread
+check_head:			
 				
 			; DE still amsdos header ptr
 			push	de
@@ -560,6 +582,7 @@ checksum_loop:
 			add	hl,bc
 			pop	bc
 			djnz	checksum_loop
+			ld	iy,(#amsdos_inheader)
 			ld	e,cas_size_l(iy)
 			ld	c,cas_size_h(iy)
 			ld	d,#0
@@ -1707,7 +1730,7 @@ not_sna_file:
 			pop	af
 			pop	hl
 			add	#3
-			ld	c,#0x80 | FA_READ
+			ld	c,#FA_READ	; 0x80 | 
 			
 			
 			ld	de, #C_OPEN
@@ -1774,6 +1797,7 @@ autoexec_not0:
 			call send_command_iy
 			
 			; check if binary file
+			ld	iy,(#amsdos_inheader)
 			ld	a,18(iy)
 			cp	#2
 			jr	z,exec_binary
@@ -1830,14 +1854,32 @@ far_addr6128:
 			.db	0
 exec_binary:	
 			; get entry point
-			ld	l,19(iy)
-			ld	h,20(iy)
-			pop	iy
-			pop	de	; was hl
-			pop	de
-			pop	bc
-			pop	af
-			jp	(hl)
+			ld	l,26(iy)
+			ld	h,27(iy)
+			ld	iy,(#rom_workspace)
+			
+			ld	0(iy),#0x37			; scf
+			ld	1(iy),#0x21			; ld hl, xxxx
+			ld	2(iy),l
+			ld	3(iy),h
+			ld	4(iy),#0xC9			; ret
+			
+			ld	hl,(#rom_workspace)
+			ld	de,#sna_jumper
+			ld	bc,#5
+			call	 rom_write	
+			
+			ld	sp,#0xC000
+			ld	hl,#sna_jumper
+			jp	0xBD13
+
+			;pop	de
+			;pop	iy
+			;pop	de	; was hl
+			;pop	de
+			;pop	bc
+			;pop	af
+			;jp	(hl)
 			
 			; ------------------------- _cas_catalog replacement BC9B
 			; input
@@ -2969,6 +3011,7 @@ disp_msg2:	ld 	a, (hl)
 			or	a
 			ret	z
 			and	#0x7F		; no funny chars
+			ld 	(hl), a		; update aswell
 			call txt_output
 			inc	hl
 			jr	disp_msg2
@@ -3581,7 +3624,7 @@ header		.equ	0x9A06
 drive_vectors	.equ	0x9A86	; to 0x9AB6
 
 
-file_copy:		
+fcp:		
 			cp	#2			; 2 arguments?	
 			jr	z,got_args
 			ld	hl,#txt_copy_err
@@ -3907,8 +3950,14 @@ cas_in_ok:
 			
 			push	hl
 			ld	de,#header		
-			ld	bc,#128
-			ldir				
+			ld	bc,#69
+			ldir	
+			; copy remains from "buffer area"
+			ld	hl,(#amsdos_inheader)
+			ld	bc,#(0xE4-0x55)+69
+			add	hl,bc
+			ld	bc,#128-69
+			ldir		
 			pop	hl
 			push	hl
 			push	af
@@ -4711,42 +4760,163 @@ set_drvB:		push	af
 			pop	hl
 			pop	af
 			ret						
-m4help:		ld	hl,#rsx_commands
-			call	disp_rsx_cmd
-			call	crlf
-			call	crlf
+
+m4help:		cp	#1
+			jr	nz, dispromlist
+			ld	hl,#helprom
+			ld	de,(#rom_workspace)
+			ld	bc,#helprom_end-helprom
+			push	de
+			ldir
+			ld	a,0(ix)		; status
+			ret
+			
+dispromlist:	ld	hl,#help
+			ld	de,(#rom_workspace)
+			ld	bc,#help_end-help
+			push	de
+			ldir
+			ret
+	
+
+		
+help:		ld	a,#0
+			ld	c,a
+			push	af
+			call	0xb90f
+			pop	af
+			push	bc
+			ld	c,a
+			call	0xbc11
+			ld	de,#0x3030	; '0' , '0'
+			
+			ld	b,#20
+			cp	#0
+			jr	z,helploop
+			ld	b,#40
+			cp	#1
+			jr	z,helploop
+			ld	b,#80
+			ld	a,c
+			ld	c,#0
+			
+helploop:		push	af
+			push	bc
+			ld	c,a
+			call	0xB90F
+			pop	bc
+			ld	hl,(#0xC004)
+			ld	a,d
+			cp	#48
+			jr	nz,notlead0as
+			ld	a,#32
+notlead0as:
+			call	0xbb5a
+			ld	a,e
+			call	0xbb5a
+			ld	a,#32
+			call	0xbb5a
+disprname:		
+			ld	a,(hl)
+			inc	hl
+			push	af
+			and	#0x7F
+			cp	#32
+			call	nc, #0xbb5a
+
+			pop	af
+			bit	7,a
+			jr	z, disprname
+			ld	a,#20
+			add	c
+			cp	b
+			jr	c, nextcolumn0
+			ld	c,#0
+			ld	a,#10
+			call	0xbb5a
+			ld	a,#13
+			call	0xbb5a
+			jr	norom
+nextcolumn0:		
+			push	hl
+			ld	c,a
+			call	0xbb6f
+			pop	hl
+norom:		ld	a,e
+			cp	#57
+			jr	nc,next_digit
+			inc	e
+			jr	lower9
+next_digit:	ld	e,#'0'
+			inc	d
+lower9:
+			pop	af
+			inc	a
+			cp	#33
+			jr	nz,helploop
+			pop	bc
+			ld	a,b
+			call	0xb90f
+			jp	0xb90c
+help_end:
+helprom:		ld	c,a
+			call	0xb90f
+			push	bc
+			ld	hl,(#0xC004)
+			inc	hl
+			inc	hl
+			call	0xbc11
+			ld	b,#20
+			cp	#0
+			jr	z,m4helploop
+			ld	b,#40
+			cp	#1
+			jr	z,m4helploop
+			ld	b,#80
+
+			ld	d,#0
 m4helploop:	ld	a,(hl)
 			cp	#0
-			jp	z,crlf
-			call	disp_rsx_cmd
-			and	#0x7f
-			cp	#32
-			ld	a,#10
-			push	hl
-			call	nc, txt_set_column		
-			pop	hl
-			ld	a,(hl)
-			cp	#0
-			jp	z,crlf
-			call	disp_rsx_cmd
-			and	#0x7f
-			cp	#32
-			call	nc,crlf
-			jr	m4helploop
-disp_rsx_cmd:
-			ld	a,(hl)
+			jr	z, last_rsx
 			inc	hl
 			
 			push	af
 			and	#0x7F
 			cp	#32
-			call	nc, txt_output
+			call	nc, #0xbb5a
 
 			pop	af
-			bit	#7,a
-			ret	nz
-			jr	disp_rsx_cmd
-			
+			bit	7,a
+			jr	z, m4helploop
+			and	#0x7F
+			cp	#32
+			jr	c,m4helploop
+
+			ld	a,#20
+			add	d
+			cp	b
+			jr	c, nextcolumn
+			ld	d,#0
+			ld	a,#10
+			call	0xbb5a
+			ld	a,#13
+			call	0xbb5a
+			jr	m4helploop
+nextcolumn:	push	hl
+			ld	d,a
+			call	0xbb6f
+			pop	hl
+			jr	m4helploop
+last_rsx:
+			ld	a,#10
+			call	0xbb5a
+			ld	a,#13
+			call	0xbb5a
+			pop	bc
+			ld	a,b
+			call	0xb90f
+			jp	0xb90c
+helprom_end:
 			; ------------------------- SNA - Run snapshot file
 			
 snaload:		cp	#1
@@ -5326,7 +5496,7 @@ sock_info:	.ds	80	; 5 socket status structures (0 is used for gethostbyname*, 1-
 ; *for socket 0, gethostbyname, status will be set to 5 when in progress and back to 0, when done.
 
 .org	rom_table
-			.dw	#0x202	; rom version
+			.dw	#0x203	; rom version
 			.dw	rom_response
 			.dw	rom_config
 			.dw	sock_info
