@@ -27,10 +27,10 @@ $(PROJ_NAME).BIN: #$(OBJS)
 
 
 clean:
-	-rm *.rel
+	-rm -f *.rel
 
 distclean: clean
-	-rm $(PROJ_NAME).BIN
+	-rm -f $(PROJ_NAME).BIN
 
 # Create the container able to build the ROM
 # The aim of the contianer is to not install dependencies on the computer
@@ -39,4 +39,5 @@ docker_build_container:
 
 # Create the ROM inside the container
 docker_build_rom: docker_build_container
+	make distclean
 	docker run --rm=true -v $$(pwd):/src/m4rom -t m4  make HEXBIN=hex2bin
