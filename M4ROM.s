@@ -72,6 +72,9 @@ ACKPORT						.equ 0xFC00
   			jp	fcp
   			jp	m4help
   			jp	snaload
+  			jp	ctrboot
+  			jp	ctrupload
+  			jp	dsk_extract
 rsx_commands:
 			.ascis "M4 BOARD"	
 			.ascis "SD"
@@ -116,6 +119,9 @@ rsx_commands:
 			.ascis "FCP"
 			.ascis "M4HELP"
 			.ascis "SNA"
+			.ascis "CTR"
+			.ascis "CTRUP"
+			.ascis "DSKX"
 			.db 0
 
 
@@ -141,7 +147,6 @@ cas_in_eof		.equ	0x24
 init_rom:		push de
 			push hl
 			pop	iy
-		
 			; detect if amsdos present?
 			ld	a,(0xBC77)
 			cp	#0xDF			
@@ -257,8 +262,11 @@ no_amsdos_buffers:
 			scf
 			ret
 			
-init_plus:	ld	hl,#0
-			jp	mc_start_program
+init_plus:	;ld	hl,#0
+			;jp	mc_start_program
+			call kl_l_rom_enable
+			ld 	hl,#0
+			jp 	0x77
 
 init_msg:
 			.ascii " M4 Board V2.0"
@@ -381,7 +389,7 @@ strcpy83:
 			push	hl
 			push	de
 	
-			; loop through first 8 characters, if we encounter '.' pad with zeros.
+			; loop through first 8 characters, if we encounter '.' pad with spaces.
 			
 			ld	c,b	; in length
 			ld	b,#8
@@ -391,7 +399,7 @@ copy8:
 			cp	#0
 			jr	z,space_pad
 			ld	a,(hl)
-			cp	#0x2E	; are we at extension yet?
+			cp	#0x2E		; are we at extension yet?
 			jr	z,space_pad
 			dec	c			; decrease inlength
 			inc	hl
@@ -506,18 +514,19 @@ _cas_in_open:	push	iy
 			push	iy
 			pop	de		; dest
 			call strcpy83	; hl = filename, de =workspace, b = len
-			ld	hl,#8
-			add	hl,de	; +12
+			ld	hl,#11
+			add	hl,de	
 			ld	e,l
 			ld	d,h
-			push	hl
+			push	de
+			dec	hl
+			ldd
+			ldd
+			ldd
+			ld	a,#0x2E
+			ld	(de),a
+			pop	de
 			inc	de
-			ldi
-			ldi
-			ldi
-			pop	hl
-			ld	a,#'.'
-			ld	(hl),a
 			; de = workspace
 			ld	hl,#text_not_found
 			ld	bc,#13
@@ -747,17 +756,7 @@ _cas_in_abandon:
 			scf
 			sbc	a,a
 			ret
-
-;C_SDEBUG .equ 0x43FF
-;debug:		ld	bc,#DATAPORT				; data out port
-;			out (c),c
-;			ld	de,#C_SDEBUG
-;			out	(c),e
-;			out	(c),d
-;			out	(c),a	
-;			ld	bc,#ACKPORT
-;			out (c),c							
-;			ret			
+	
 ; ------------------------- cas_in_char replacment BC80 
 _cas_in_char:
 			push	hl
@@ -1730,8 +1729,17 @@ not_sna_file:
 			pop	af
 			pop	hl
 			add	#3
+			push	af
+			ld	de, #autoexec_fn
 			ld	c,#FA_READ	; 0x80 | 
-			
+			ld	a,e
+			cp	l
+			jr	nz,not_autofn
+			ld	a,d
+			cp	h
+			jr	nz,not_autofn
+			ld	c, #FA_READ|0x80;
+not_autofn:	pop	af
 			
 			ld	de, #C_OPEN
 			call	send_command2	
@@ -2245,8 +2253,8 @@ httpget:
 			ld	d,(hl)	; string ptr hi
 			ex	de,hl
 			push	iy
-			ld	1(iy),#0x20
-			ld	2(iy),#0x43
+			ld	1(iy),#C_HTTPGET
+			ld	2(iy),#C_HTTPGET>>8
 			pop	de
 			inc	de
 			inc	de
@@ -2583,6 +2591,7 @@ erase_ok:	scf
 			sbc	a,a
 			ret
 
+
 ; ------------------------- REN - rename file replacement
 rename_file:
 			push	hl
@@ -2785,8 +2794,8 @@ cd_has_args:
 			ex	de,hl
 			
 			push	iy
-			ld	1(iy),#0x8
-			ld	2(iy),#0x43
+			ld	1(iy),#C_CD
+			ld	2(iy),#C_CD>>8
 			pop	de
 			inc	de
 			inc	de
@@ -2889,7 +2898,109 @@ m4off:		push	iy
 			pop	iy
 			scf
 			sbc	a,a
+			
+			ret		
+; ------------------------- Cartridge boot.
+ctrboot:		push	iy
+			push	hl
+			
+			ld	iy,(#rom_workspace)
+			ld	(iy), #0x2
+			ld	1(iy), #C_CTRBOOT
+			ld	2(iy), #C_CTRBOOT>>8
+			call	send_command_iy
+			pop	hl
+			pop	iy
+			
+			ret
+
+
+; ------------------------- Cartridge upload - upload cartridge image to flash.
+ctrupload:
+			ld	iy,(#rom_workspace)
+			; get string
+			ld	l,(ix)
+			ld	h,1(ix)
+			ld	b,(hl)	; string len
+			inc	hl
+			ld	e,(hl)	; string ptr lo
+			inc	hl
+			ld	d,(hl)	; string ptr hi
+			ex	de,hl
+			push	iy
+			ld	1(iy),#C_CTRUPLOAD	
+			ld	2(iy),#C_CTRUPLOAD>>8
+			pop	de
+			inc	de
+			inc	de
+			inc	de
+			call	strcpy
+			add	#2
+			ld	(iy),a
+			call	send_command_iy
+			ld	hl,#rom_response+3
+			call	disp_msg
+			scf
+			sbc	a,a
 			ret			
+; ------------------------- DSKX - Extract DSK files (dskname, dest path)
+dsk_extract:
+			cp	#2			; 2 arguments?
+			jp	nz, bad_args
+			ld	iy,(#rom_workspace)
+			ld	1(iy),#C_DSKEXT
+			ld	2(iy),#C_DSKEXT>>8
+			
+			; get string
+			ld	l,(ix)
+			ld	h,1(ix)
+			ld	b,(hl)	; string len
+			inc	hl
+			ld	e,(hl)	; string ptr lo
+			inc	hl
+			ld	d,(hl)	; string ptr hi
+			ex	de,hl
+			push	iy
+			pop	de
+			inc	de
+			inc	de
+			inc	de
+			call	strcpy
+			
+			ex	de,hl
+			ld	c,a
+			ld	b,#0
+			push	bc				; save size
+			add	hl,bc			; add len to dest
+			push	hl				; save dest
+			
+			; get 2nd string
+			ld	l,2(ix)
+			ld	h,3(ix)
+			ld	b,(hl)			; string len
+			inc	hl
+			ld	e,(hl)			; string ptr lo
+			inc	hl
+			ld	d,(hl)			; string ptr hi
+			ex	de,hl
+			pop	de
+			call	strcpy
+			pop	bc				; restore size
+			add	c				; add the two string lens together
+			add	#2				; add 2 for command hi/lo
+			ld	(iy),a
+ext_loop:
+			call	send_command_iy
+			ld	hl,#rom_response+4
+			call	disp_msg
+			ld	hl,#rom_response+3
+			ld	a,(hl)
+			cp	#0
+			jr	z,ext_loop
+ext_ok:		scf
+			sbc	a,a
+			ret			
+					
 ;cpm:
 ;			call hi_kl_curr_selection
 ;			ld	c,a
@@ -4792,11 +4903,12 @@ help:		ld	a,#0
 			
 			ld	b,#20
 			cp	#0
-			jr	z,helploop
+			jr	z,disphelp
 			ld	b,#40
 			cp	#1
-			jr	z,helploop
+			jr	z,disphelp
 			ld	b,#80
+disphelp:			
 			ld	a,c
 			ld	c,#0
 			
@@ -4852,7 +4964,7 @@ next_digit:	ld	e,#'0'
 lower9:
 			pop	af
 			inc	a
-			cp	#33
+			cp	#32
 			jr	nz,helploop
 			pop	bc
 			ld	a,b

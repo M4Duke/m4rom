@@ -38,8 +38,9 @@ C_COPYFILE					.equ	0x432A
 C_ROMSUPDATE					.equ	0x432B
 C_ROMLIST						.equ	0x432C
 C_CMDRBTRUN					.equ	0x432D
-
-
+C_CTRBOOT						.equ	0x432E
+C_CTRUPLOAD					.equ 0x432F
+C_DSKEXT						.equ	0x4330
 C_NETSOCKET					.equ 0x4331
 C_NETCONNECT					.equ 0x4332
 C_NETCLOSE					.equ 0x4333

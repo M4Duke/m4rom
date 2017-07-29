@@ -1,5 +1,5 @@
 			; M4 Board cpc z80 rom
-			; Written by Duke, 2016
+			; Written by Duke, 2016/2017
 			; www.spinpoint.org
 			
 cas_catalog					.equ 0xbc9b
@@ -32,6 +32,6 @@ scr_get_mode					.equ	0xbc11
 
 mc_start_program		   		.equ 0xbd16
 mc_wait_flyback				.equ 0xbd19
-
+kl_l_rom_enable				.equ	0xB906
 
 hi_kl_curr_selection 			.equ 0xb912
