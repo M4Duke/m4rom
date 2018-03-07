@@ -1,6 +1,6 @@
 			
 			; M4 Board cpc z80 rom
-			; Written by Duke, 2016/2017
+			; Written by Duke, 2016/2017/2018
 			; www.spinpoint.org
 			
 			.module cpc
@@ -30,7 +30,7 @@ ACKPORT						.equ 0xFC00
 			; RSX jump block
 			
 			jp 	init_rom		;			0xC006
-			jp	patch_fio		; |SD 		0xC009
+			jp	set_SDdrive	; |SD 		0xC009
 			jp	disc			; |DISC		0xC00C
 			jp	change_dir	; |CD		0xC00F
 			jp	copy_file		; |COPYF		0xC012
@@ -167,14 +167,14 @@ init_cont:
 			ld	(iy),#19+3			; config size+3 (to increase)
 			ld	1(iy),#C_CONFIG
 			ld	2(iy),#C_CONFIG>>8
-			ld	3(iy),#0			; config offset (0..251)
-			ld	6(iy),e			; 02 patch jump vector l
-			ld	7(iy),d			; 03 patch jump vector h
-			call #hi_kl_curr_selection
-			ld	8(iy),a			; 04 current rom
-			ld	9(iy),#0			; 05 init count.
+			ld	3(iy),#0				; config offset (0..251)
+			ld	6(iy),e				; 02 patch jump vector l
+			ld	7(iy),d				; 03 patch jump vector h
+			call #kl_curr_selection		; get M4 rom number
+			ld	8(iy),a				; 04 current rom
+			ld	9(iy),#0				; 05 init count.
 			ld	a,#0x80
-			cp	c
+			cp	c					; was 0x80 substracted, then we are using amsdos buffer
 			jr	z,amsdos_buffers
 			push	iy
 			pop	hl
@@ -192,6 +192,13 @@ init_cont:
 			add	hl,bc		
 			ld	20(iy),#0
 			ld	21(iy),#0
+			
+			; set BE7D for compatiblity with loaders that read and use the pointer to ie. restore drive num.
+			
+			ld	a,l
+			ld	(#0xBE7D),a
+			ld	a,h
+			ld	(#0xBE7E),a
 				
 			jr	no_amsdos_buffers
 amsdos_buffers:
@@ -225,7 +232,7 @@ no_amsdos_buffers:
 			ld	de,#14
 			add	hl,de
 			ex	de,hl
-			ld	hl,#0xbb5a
+			ld	hl,#txt_output
 			ldi
 			ldi
 			ldi
@@ -255,7 +262,7 @@ no_amsdos_buffers:
 			ldir
 			call	send_command_iy
 		
-			call	patch_fio
+			call	set_SDdrive
 			pop	hl
 			pop	de
 			and	a
@@ -269,7 +276,7 @@ init_plus:	;ld	hl,#0
 			jp 	0x77
 
 init_msg:
-			.ascii " M4 Board V2.0.4b8"
+			.ascii " M4 Board V2.0.4b9"
 			.db 10, 13, 10, 13, 0
 				
 			; ------------------------- strncmp
@@ -494,6 +501,10 @@ _cas_in_open:	push	iy
 			push	hl
 			push	de
 			push	bc
+			ld	a,b
+			cp	#0
+			jr	z, failopen
+			
 			ld	a,#FA_READ			; read mode
 			call	fopen
 			cp	#0xFF
@@ -501,7 +512,7 @@ _cas_in_open:	push	iy
 			ld	a,b
 			cp	#0x92	; file not found? set Z flag.
 			jr	nz,other_open_error
-			
+failopen:				
 			pop	bc	; len
 			pop	de
 			pop	hl	; filename
@@ -1221,9 +1232,33 @@ out_direct_error:
 			ret
 			
 ; ------------------------- patch file I/O 
-patch_fio:
-				
+set_SDdrive:
+			; is amsdos present?
+			ld	a,(amsdos_ver)
+			cp	#0
+			jr	z, skip_drive_restore
 			
+			; save amsdos drive info
+			xor	a
+			ld	hl,(0xBE7D)
+			cp	h
+			jr	z, skip_drive_restore
+			
+			ld	(iy),#3+3		; config size+3 
+			ld	1(iy),#C_CONFIG
+			ld	2(iy),#C_CONFIG>>8
+			ld	3(iy),#80			; config offset
+			ld	a,(hl)
+			ld	4(iy),a			; default drive
+			inc	hl
+			ld	a,(hl)
+			ld	5(iy),a			; default user
+			inc	hl
+			ld	a,(hl)
+			ld	6(iy),a			; active drive
+			call	send_command_iy
+		
+skip_drive_restore:		
 			ld	hl,#jump_vec
 			ld	de,#0xbca4	;	// overwrite cas check...
 			push	de
@@ -1242,7 +1277,7 @@ patch_fio:
 			ld	bc,#36
 			ldir 
 			ret
-patch_fio_in:
+set_SDdrive_in:
 			ld	hl,#jump_vec
 			ld	de,#0xbca4	;	// overwrite cas check...
 			push	de
@@ -1264,7 +1299,7 @@ patch_fio_in:
 			ld	bc,#3
 			ldir
 			ret			
-patch_fio_out:
+set_SDdrive_out:
 			ld	hl,#jump_vec
 			ld	de,#0xbca4	;	// overwrite cas check...
 			push	de
@@ -1290,7 +1325,7 @@ autoexec_patch:
 			ldi
 			ld	hl,#rom_num
 			ldi
-			ld	hl,#0xbb5a
+			ld	hl,#txt_output
 			ld	(hl),#0xdf
 			inc	hl
 			ld	(hl),#0x6e
@@ -1299,7 +1334,7 @@ autoexec_patch:
 			ret
 undo_patch2:
 			ld	hl,#old_bb5a
-			ld	de,#0xbb5a
+			ld	de,#txt_output
 			ldi
 			ldi
 			ldi
@@ -1844,7 +1879,7 @@ past_autoexec2:
 			pop	de
 			pop	bc
 			pop	af
-			jp	0xbb5a
+			jp	txt_output
 			
 is664:		.db	0xDF
 			.dw far_addr664
@@ -3002,7 +3037,7 @@ ext_ok:		scf
 			ret			
 					
 ;cpm:
-;			call hi_kl_curr_selection
+;			call kl_curr_selection
 ;			ld	c,a
 ;			ld	hl,#cpm_boot
 ;			jp	mc_start_program
@@ -3128,7 +3163,7 @@ disp_msg2:	ld 	a, (hl)
 			jr	disp_msg2
 			
 			
-			; cursor copy function for basic 1.0, may remove later if space needed now you can replace lowerrom and use basic 1.1
+			; cursor copy function for basic 1.0, may remove later if space needed. Now you can replace lowerrom and use basic 1.1
 			
 get_path:		call	txt_get_cursor	; get cursor pos
 			push	hl	; real cursor pos
@@ -3963,28 +3998,28 @@ get_drive_exit:
 			; 1110  B->TAPE  (not supported)
 			; 1111  TAPE->TAPE  (not supported)
 set_drives:	cp	#0
-			jp	z, patch_fio
+			jp	z, set_SDdrive
 			cp	#1
 			jr	nz, not_ASD
 			call	set_amsdos_functions
 			call	set_drvA
-			jp	patch_fio_out
+			jp	set_SDdrive_out
 not_ASD:		
 			cp	#2
 			jr	nz,not_BSD
 			call	set_amsdos_functions
 			call	set_drvB
-			jp	patch_fio_out
+			jp	set_SDdrive_out
 
 not_BSD:		cp	#3
 			jr	nz,not_TSD
 			call	tape
-			jp	patch_fio_out
+			jp	set_SDdrive_out
 not_TSD:		cp	#4
 			jr	nz, not_SDA
 			call	set_amsdos_functions
 			call	set_drvA
-			jp	patch_fio_in
+			jp	set_SDdrive_in
 not_SDA:		cp	#5
 			jr	nz, not_AA
 			call	set_amsdos_functions
@@ -4002,7 +4037,7 @@ not_TA:		cp	#8
 			jr	nz, notSDB
 			call	set_amsdos_functions
 			call	set_drvB
-			jp	patch_fio_in
+			jp	set_SDdrive_in
 notSDB:		cp	#9
 			jr	nz, not_AB
 			call	set_amsdos_functions
@@ -4018,7 +4053,7 @@ not_BB:		cp	#11
 			jp	tape		;_in
 not_TB:		cp	#12			
 			jr	nz, not_SDT
-			call	patch_fio_in
+			call	set_SDdrive_in
 			jp	tape		; _out
 not_SDT:		cp	#13
 			jr	nz, notAT
@@ -4637,18 +4672,32 @@ no_amsdos:	xor	a
 disc:		push	hl
 			push	bc
 			push	af
+			
+			ld	a,(amsdos_ver)
+			cp	#0
+			jr	z, no_drive_restore
+			
+			; restore amsdos drive info
+			
+			push	de
+			ld	hl,#amsdos_default_drive
+			ld	de,(0xBE7D)
+			ldi
+			ldi
+			ldi
+			pop	de
+no_drive_restore:			
 			ld	b,#1			; function 
 
 pass_to_amsdos:
 			call	get_amsdos_ptr
 			cp	#0
 			jp	nz,jumper
-			
 			; check if amsdos present at all, if not |disc is same as |sd
 			ld	a,(amsdos_ver)
 			cp	#0
 			jr	nz, m4pass
-			call	patch_fio
+			call	set_SDdrive
 			
 m4pass:		pop	af
 			pop	bc
@@ -4880,7 +4929,7 @@ m4help:		cp	#1
 			push	de
 			ldir
 			ld	a,0(ix)		; status
-			ret
+			ret				; return to stack DE
 			
 dispromlist:	ld	hl,#help
 			ld	de,(#rom_workspace)
@@ -4891,14 +4940,14 @@ dispromlist:	ld	hl,#help
 	
 
 		
-help:		ld	a,#0
+help:		xor	a
 			ld	c,a
 			push	af
-			call	0xb90f
+			call	kl_rom_select
 			pop	af
 			push	bc
 			ld	c,a
-			call	0xbc11
+			call	scr_get_mode
 			ld	de,#0x3030	; '0' , '0'
 			
 			ld	b,#20
@@ -4915,7 +4964,7 @@ disphelp:
 helploop:		push	af
 			push	bc
 			ld	c,a
-			call	0xB90F
+			call	kl_rom_select
 			pop	bc
 			ld	hl,(#0xC004)
 			ld	a,d
@@ -4923,18 +4972,18 @@ helploop:		push	af
 			jr	nz,notlead0as
 			ld	a,#32
 notlead0as:
-			call	0xbb5a
+			call	txt_output
 			ld	a,e
-			call	0xbb5a
+			call	txt_output
 			ld	a,#32
-			call	0xbb5a
+			call	txt_output
 disprname:		
-			ld	a,(hl)
+			ld	a,(hl)		; get rom name
 			inc	hl
 			push	af
 			and	#0x7F
 			cp	#32
-			call	nc, #0xbb5a
+			call	nc, #txt_output
 
 			pop	af
 			bit	7,a
@@ -4945,9 +4994,9 @@ disprname:
 			jr	c, nextcolumn0
 			ld	c,#0
 			ld	a,#10
-			call	0xbb5a
+			call	txt_output
 			ld	a,#13
-			call	0xbb5a
+			call	txt_output
 			jr	norom
 nextcolumn0:		
 			push	hl
@@ -4968,16 +5017,27 @@ lower9:
 			jr	nz,helploop
 			pop	bc
 			ld	a,b
-			call	0xb90f
-			jp	0xb90c
+			call	kl_rom_select
+			jp	kl_rom_restore
 help_end:
+			
+			; |m4help,romnum
+
 helprom:		ld	c,a
-			call	0xb90f
+			call	kl_rom_select
 			push	bc
+			; display ROM name first
 			ld	hl,(#0xC004)
+rname:		ld	a,(hl)
 			inc	hl
-			inc	hl
-			call	0xbc11
+			push	af
+			and	#0x7F
+			call	#txt_output
+			pop	af
+			bit	7,a
+			jr	z, rname
+			call	crlf
+			call	0xbc11			; get screen mode.
 			ld	b,#20
 			cp	#0
 			jr	z,m4helploop
@@ -4995,7 +5055,7 @@ m4helploop:	ld	a,(hl)
 			push	af
 			and	#0x7F
 			cp	#32
-			call	nc, #0xbb5a
+			call	nc, #txt_output
 
 			pop	af
 			bit	7,a
@@ -5010,9 +5070,9 @@ m4helploop:	ld	a,(hl)
 			jr	c, nextcolumn
 			ld	d,#0
 			ld	a,#10
-			call	0xbb5a
+			call	txt_output
 			ld	a,#13
-			call	0xbb5a
+			call	txt_output
 			jr	m4helploop
 nextcolumn:	push	hl
 			ld	d,a
@@ -5021,13 +5081,13 @@ nextcolumn:	push	hl
 			jr	m4helploop
 last_rsx:
 			ld	a,#10
-			call	0xbb5a
+			call	txt_output
 			ld	a,#13
-			call	0xbb5a
+			call	txt_output
 			pop	bc
 			ld	a,b
-			call	0xb90f
-			jp	0xb90c
+			call	kl_rom_select
+			jp	kl_rom_restore
 helprom_end:
 			; ------------------------- SNA - Run snapshot file
 			
@@ -5045,7 +5105,7 @@ snaload:		cp	#1
 
 snaload_str_hl:
 			add	#3
-			ld	c,#FA_READ
+			ld	c,#FA_READ|0x80
 			ld	de, #C_OPEN
 			call	send_command2
 			ld	hl,#rom_response+3
@@ -5591,10 +5651,13 @@ basic_ver:		.db	0		; 18
 				.db	0		; 19
 
 runfile_ptr:		.dw	autoexec_fn ; 20
-					; 22
-tape_functions:	.ds	48
-
-
+tape_functions:	.ds	48		; 22
+amsdos_default_drive:
+				.db	0		; 80
+amsdos_default_user:
+				.db	0		; 81
+amsdos_active_drive:				
+				.db	0		; 82
 
 .org	sock_status
 sock_info:	.ds	80	; 5 socket status structures (0 is used for gethostbyname*, 1-4 returned by socket function) of 16 bytes
@@ -5608,7 +5671,7 @@ sock_info:	.ds	80	; 5 socket status structures (0 is used for gethostbyname*, 1-
 ; *for socket 0, gethostbyname, status will be set to 5 when in progress and back to 0, when done.
 
 .org	rom_table
-			.dw	#0x203	; rom version
+			.dw	#0x204	; rom version
 			.dw	rom_response
 			.dw	rom_config
 			.dw	sock_info
