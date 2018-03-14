@@ -276,7 +276,7 @@ init_plus:	;ld	hl,#0
 			jp 	0x77
 
 init_msg:
-			.ascii " M4 Board V2.0.4b9"
+			.ascii " M4 Board V2.0.4"
 			.db 10, 13, 10, 13, 0
 				
 			; ------------------------- strncmp
@@ -2048,10 +2048,7 @@ dir_loop1:
 			cp	c
 			jr	z,was_last_column1
 			; add extra cr/lf, if last dir entry wasn't printed in last column
-			ld	a,#13
-			call	txt_output
-			ld	a,#10
-			call	txt_output
+			call	crlf
 was_last_column1:	
 			ld	hl,#rom_response+3
 			call	disp_msg
@@ -2062,22 +2059,48 @@ sdir_cont1:	inc	hl
 			inc	hl
 			inc	hl
 			call	direntry_workbuf
-			ld	b,#17
+			push	hl
+			push	de
+			ld	de,#9		; 01234567.9AB
+			add	hl,de
+			ld	a,(hl)
+			ld	c,a			;RO attribute
+			inc	hl
+			ld	a,(hl)
+			pop	de
+			pop	hl
+			and	#0x80		; check for system attribute
+			jr	z, not_sys	; skip displaying it.
+			pop	bc
+			jr	dir_loop1
+not_sys:			
+			ld	b,#12		; 17
 disp_name_loop:
 			ld	a,(hl)
+			and	#0x7F
 			inc	hl
 			call	txt_output
 			djnz	disp_name_loop
-			;call	disp_msg
+			ld	b,#5
+			ld	a,c
+			and	#0x80
+			jr	z, not_ro_attr
+			ld	a,#'*'
+			call txt_output
+			inc	hl	; skip space
+			dec	b
+not_ro_attr:	ld	a,(hl)
+			and	#0x7F
+			inc	hl
+			call	txt_output
+			djnz not_ro_attr		
+			
 			pop	bc
 			inc	b
 			ld	a,b
 			cp	c
 			jr	nz,next_column1
-			ld	a,#13
-			call	txt_output
-			ld	a,#10
-			call	txt_output
+			call	crlf
 		
 			jr	dir_loop1
 next_column1:
@@ -2088,7 +2111,7 @@ next_column1:
 			; check for ESC
 			call	check_esc_key
 			cp	#0xFC	; pressed twice ? ok leave...
-			jr	nz,dir_loop1
+			jp	nz,dir_loop1
 			ld	hl,#text_break
 			call	disp_msg
 			; exit
@@ -5478,14 +5501,14 @@ autoexec_fn:	.ascii "/AUTOEXEC.BAS"
 			
 sdir_cmd:
 			.db	2			; size
-			.dw	C_READDIR	; command C_sdir
+			.dw	C_READDIR
 sfree_cmd:
 			.db	2			; size
-			.dw	C_FREE	; command C_sdir
+			.dw	C_FREE
 
 seek_cmd:
 			.db	2			; size
-			.dw	C_SEEK	; command C_sdir
+			.dw	C_SEEK
 
 eof_cmd:
 			.db	2
