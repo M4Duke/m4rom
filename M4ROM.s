@@ -75,6 +75,7 @@ ACKPORT						.equ 0xFC00
   			jp	ctrboot
   			jp	ctrupload
   			jp	dsk_extract
+  			jp	romsoff
 rsx_commands:
 			.ascis "M4 BOARD"	
 			.ascis "SD"
@@ -122,6 +123,7 @@ rsx_commands:
 			.ascis "CTR"
 			.ascis "CTRUP"
 			.ascis "DSKX"
+			.ascis "ROMSOFF"
 			.db 0
 
 
@@ -135,10 +137,9 @@ cas_buf_l			.equ -4
 cas_buf_h			.equ -3
 cas_idx_l			.equ -2
 cas_idx_h			.equ -1
+cas_filetype		.equ 18
 cas_size_l 		.equ	19	; data len
 cas_size_h 		.equ	20
-
-; user bytes in use
 
 cas_in_next_byte	.equ 0x23
 cas_in_eof		.equ	0x24
@@ -263,6 +264,33 @@ no_amsdos_buffers:
 			call	send_command_iy
 		
 			call	set_SDdrive
+			
+			; detect if AZERTY or QWERTY keyboard
+			ld hl,#0xB502
+			ld a,(#0xBB5B)
+			cp #0
+			jr nz, basic11
+			ld hl,#0xB3B8			
+basic11:
+			ld 	de,#1						; dest offset
+			ld	bc,#DATAPORT					; data out port
+			out (c),c
+			ld	a, #C_ROMWRITE					;
+			out	(c),a						; command lo
+			ld	a, #C_ROMWRITE>>8				;
+			out	(c),a						; command	hi
+			out	(c),e						; rom dest addr
+			out	(c),d						; rom dest addr
+			
+			out	(c),e						; size 1
+			out	(c),d						; size 0001
+			dec	d
+			out	(c),d						; (0 = M4 ROM, 255 = nmi rom)
+			ld	a,(hl)
+			out	(c),a						; keyb val
+			ld	b,#ACKPORT>>8	; kick command
+			out	(c),c
+			
 			pop	hl
 			pop	de
 			and	a
@@ -276,7 +304,7 @@ init_plus:	;ld	hl,#0
 			jp 	0x77
 
 init_msg:
-			.ascii " M4 Board V2.0.4"
+			.ascii " M4 Board v2.0.5"
 			.db 10, 13, 10, 13, 0
 				
 			; ------------------------- strncmp
@@ -906,15 +934,35 @@ _cas_in_direct:
 			ld	iy,(#amsdos_inheader)
 			push	bc
 	
-			; A = fd
-			ld	a,#1
 			
 			; DE = address
 			ex	de,hl
 			
 			; HL = size
+			xor a
 			ld	l,24(iy)
 			ld	h,25(iy)
+			cp	h
+			jr	nz, head_not_zero
+			cp	l
+			jr	nz, head_not_zero
+			
+			; get dsk record size instead
+			
+			ld	1(iy),#C_FSIZE		
+			ld	2(iy),#C_FSIZE>>8
+			ld	3(iy),#1			; fd
+			ld	(iy),#3
+		
+			call send_command_iy
+		
+			ld	hl,(#rom_response+3)
+			
+head_not_zero:
+			; A = fd
+			
+			ld	a,#1
+			
 			call	fread
 			cp	#0
 			jr	nz,in_direct_error
@@ -997,7 +1045,8 @@ _cas_out_close:
 			ld	iy,(#amsdos_outheader)
 			ld	a, cas_out_isdirect(iy)
 			cp	#1
-			jr	z,no_header
+			jr	z, no_header
+
 			; refresh header
 			
 			ld	hl,#0
@@ -1088,7 +1137,7 @@ open_w_ok:	push	bc
 			ld	cas_buf_h(iy),d			; 
 			ld	cas_idx_l(iy),e			; 
 			ld	cas_idx_h(iy),d			; index
-			
+			ld	cas_filetype(iy),#0x16		; filetype ascii
 			
 			; create	header
 			push	iy
@@ -1120,6 +1169,37 @@ _cas_out_char:	push	iy
 			push	bc
 			push	af
 			ld	iy,(#amsdos_outheader)
+			ld	a, cas_filetype(iy)
+			cp	#2
+			jr	nz, no_tricky_header
+			
+			ld	b,#66
+			ld	hl,#0
+			; 	de point to amsdos header
+			push	iy
+			pop	de
+calc_checksum_loop_4:
+			push	bc
+			ld	a,(de)
+			ld	c,a
+			ld	b,#0
+			inc	de
+			add	hl,bc
+			pop	bc
+			djnz	calc_checksum_loop_4
+
+			; save checksum
+			ld	67(iy), l
+			ld	68(iy), h
+			
+			push	iy
+			pop	de
+			ld	hl,#128	; size
+			ld	a,#2			; fd
+			call	fwrite
+			ld cas_filetype(iy), #0x16
+			
+no_tricky_header:			
 			ld	c, cas_buf_l(iy)
 			ld	b, cas_buf_h(iy)
 			ld	l, cas_idx_l(iy)
@@ -1160,7 +1240,7 @@ no_writeback:	ld	l, cas_idx_l(iy)
 			ret
 
 
-			; ------------------------- cas_out_open  replacement	BC98
+			; ------------------------- cas_out_direct  replacement	BC98
 			; -- parameters
 			; -- HL = address of data
 			; -- DE = size of data
@@ -1380,7 +1460,7 @@ fopen:
 			pop	bc			; restore len
 			pop	hl			; restore src addr
 			push	de
-			call	#0xB91B		; copy into 'readable' workram
+			call	kl_ldir		; copy into 'readable' workram
 			pop	hl			; new src for filename
 			pop	bc			; b = filename len
 filename_not_screen:
@@ -1469,7 +1549,7 @@ scr_fwrite_cont:
 			push bc
 			ld	c,a
 			ld	b,#0
-			call	#0xB91B
+			call	kl_ldir
 			pop	bc
 			push	iy
 			pop	hl
@@ -1914,7 +1994,7 @@ exec_binary:
 			
 			ld	sp,#0xC000
 			ld	hl,#sna_jumper
-			jp	0xBD13
+			jp	mc_boot_program
 
 			;pop	de
 			;pop	iy
@@ -2957,6 +3037,27 @@ m4off:		push	iy
 			scf
 			sbc	a,a
 			
+			ret
+romsoff:		ld	3(iy),#0xFF	; no exception
+			ld	4(iy),#1		; do reset
+			cp	#2			; 2 arguments?
+			jr	nz, no_exception
+			ld	a,2(ix)		; set both arguments
+			ld	3(iy),a
+			ld	a,0(ix)
+			ld	4(iy),a
+no_exception:			
+			push	iy
+			push	hl
+			ld	iy,(#rom_workspace)
+			ld	(iy), #0x4
+			ld	1(iy), #C_ROMSOFF
+			ld	2(iy), #C_ROMSOFF>>8
+			call	send_command_iy	; will never return, m4 will force a reset with all roms disabled
+			pop	hl
+			pop	iy
+			scf
+			sbc	a,a
 			ret		
 ; ------------------------- Cartridge boot.
 ctrboot:		push	iy
@@ -3482,7 +3583,7 @@ rom_upload:
 			
 			ld	a,#FA_READ
 			call	fopen	; hl = filename, b = len, a = mode
-			ld	-1(iy),a
+			ld	127(iy),a	; -1(iy)
 			cp	#0xFF
 			jp	z, romupload_fail
 			
@@ -3511,7 +3612,7 @@ rom_checksum_loop:
 			jr	z,rom_checksum_ok
 rom_checksum_mismatch:
 			; no amsdos header, seek back to offset 0
-			ld	a, -1(iy)
+			ld	a, 127(iy)	; -1(iy)
 			ld	hl,#0
 			call fseek		
 			; otherwise skip the header (128 bytes)
@@ -3538,7 +3639,7 @@ rom_store_start_offset:
 			cp	#0
 			jp	nz, romupload_fail_close2
 			
-			ld	-2(iy),b
+			ld	126(iy),b			; -2(iy)
 			; calculate seek offset
 
 			ld	bc,#0x4000	; rom size
@@ -3551,7 +3652,7 @@ rom_store_start_offset:
 			ld	(iy),#7			; size.. cmd(2) + fd (1) + offset (4)
 			ld	1(iy),#C_SEEK		; cmd seek
 			ld	2(iy),#C_SEEK>>8	; cmd seek
-			ld	a,-2(iy)			; file handle
+			ld	a,126(iy)			;-2(iy)			; file handle
 			ld	3(iy),a			; 
 			ld	4(iy),l			; offset
 			ld	5(iy),h			; offset
@@ -3569,7 +3670,7 @@ rom_store_start_offset:
 			ld	(iy),#3			; size, cmd(2) + fd (1)
 			ld	1(iy),#C_FSIZE		; cmd size
 			ld	2(iy),#C_FSIZE>>8	; cmd size
-			ld	a,-1(iy)			; file handle
+			ld	a,127(iy)			; -1(iy)			; file handle
 			ld	3(iy),a
 			call	send_command_iy
 			
@@ -3613,7 +3714,7 @@ romw_cont:
 			
 			ld	1(iy),#C_READ
 			ld	2(iy),#C_READ>>8
-			ld	a, -1(iy)
+			ld	a, 127(iy)		; -1(iy)
 			ld	3(iy),a			; fd
 			ld	4(iy),e			; chunk size
 			ld	5(iy),#0x0		; chunk size
@@ -3628,7 +3729,7 @@ romw_cont:
 			ld	a,e
 			ld	de, #C_WRITE
 			ld	hl, #rom_response+4	; data read earlier
-			ld	c, -2(iy)
+			ld	c, 126(iy)		;-2(iy)
 			call	send_command2	; will do cmd(2, DE), size(1, A), fd (1, C) followed by data in HL with A size.
 			pop	hl
 			
@@ -3642,9 +3743,9 @@ romw_cont:
 			
 			; rom written to m4/romslots.bin
 			
-			ld	a,-1(iy)			; file handle "rom file"
+			ld	a,127(iy)		; -1(iy)			; file handle "rom file"
 			call	fclose
-			ld	a,-2(iy)			; file handle "m4/romslots.bin"
+			ld	a,126(iy)		;-2(iy)			; file handle "m4/romslots.bin"
 			call	fclose
 			
 			; now update m4/romconfig.bin
@@ -3662,7 +3763,7 @@ romw_cont:
 			cp	#0xFF
 			jp	z, romupload_fail
 		
-			ld	-1(iy),b
+			ld	127(iy),b		;-1(iy)
 		
 			ld	bc,#33		; rom name (32) + updateflag (1)
 			ld	e,(ix)		; rom slot
@@ -3671,18 +3772,18 @@ romw_cont:
 			ld	de,#32		; skip header (8*4)
 			add	hl,de		; size is less than 16 bit, no worries..
 			
-			ld	a, -1(iy)
+			ld	a, 127(iy)	; -1(iy)
 			call fseek		; we are now pointing at the updateflag for current rom slot
 				
 			; set update flag to 2 and name to "rom".
 			
 			ld	de, #C_WRITE
 			ld	hl, #rom_update_slot	; data read earlier
-			ld	c, -1(iy)
+			ld	c, 127(iy)	; -1(iy)
 			ld	a, #5
 			call	send_command2	; will do cmd(2, DE), size(1, A), fd (1, C) followed by data in HL with A size.
 			
-			ld	a, -1(iy)
+			ld	a, 127(iy)	;-1(iy)
 			call	fclose
 			
 			scf
@@ -3693,10 +3794,10 @@ romw_cont:
 romupload_fail_close0:
 			pop	hl			
 romupload_fail_close1:
-			ld	a,-2(iy)			; file handle "m4/romslots.bin"
+			ld	a,126(iy)			;-2(iy)			; file handle "m4/romslots.bin"
 			call	fclose
 romupload_fail_close2:			
-			ld	a,-1(iy)			; file handle "rom file"
+			ld	a,127(iy)			;-1(iy)			; file handle "rom file"
 			call	fclose
 romupload_fail:
 			; disp some error message
@@ -3731,7 +3832,7 @@ rom_set:
 			cp	#0xFF
 			jp	z, romset_fail
 		
-			ld	-1(iy),b
+			ld	127(iy),b		;-1(iy)
 		
 			ld	bc,#33		; rom name (32) + updateflag (1)
 			ld	e,2(ix)		; rom slot
@@ -3740,7 +3841,7 @@ rom_set:
 			ld	de,#32		; skip header (8*4)
 			add	hl,de		; size is less than 16 bit, no worries..
 			
-			ld	a, -1(iy)
+			ld	a, 127(iy)	; -1(iy)
 			call fseek		; we are now pointing at the updateflag for current rom slot
 				
 			; set update flag to 0 or 1
@@ -3750,11 +3851,11 @@ rom_set:
 			ld	c, 0(ix)		; status
 			ld	b, #0
 			add	hl,bc
-			ld	c, -1(iy)
+			ld	c, 127(iy)	;-1(iy)
 			ld	a, #1
 			call	send_command2	; will do cmd(2, DE), size(1, A), fd (1, C) followed by data in HL with A size.
 			
-			ld	a, -1(iy)
+			ld	a, 127(iy)	; -1(iy)
 			call	fclose
 			
 			scf
@@ -4870,12 +4971,20 @@ get_dr_status:	push	hl
 			push	af
 			
 			; if SD mode ignore
+			ld	b,#21
 			ld	a,(0xBC78)
 			cp	#0xA4
-			jp	z,m4pass	; todo
+			;jp	z,m4pass	; todo
+			jp	nz, pass_to_amsdos
+			pop	af
+			pop	bc
+			pop	hl
+			ld	a,#0x20
+			scf
+			ret
 			
-			ld	b,#21
-			jp	pass_to_amsdos
+			
+			
 set_retry_cnt:	push	hl
 			push	bc
 			push	af
@@ -5006,7 +5115,7 @@ disprname:
 			push	af
 			and	#0x7F
 			cp	#32
-			call	nc, #txt_output
+			call	nc, txt_output
 
 			pop	af
 			bit	7,a
@@ -5024,7 +5133,7 @@ disprname:
 nextcolumn0:		
 			push	hl
 			ld	c,a
-			call	0xbb6f
+			call	txt_set_column
 			pop	hl
 norom:		ld	a,e
 			cp	#57
@@ -5055,12 +5164,15 @@ rname:		ld	a,(hl)
 			inc	hl
 			push	af
 			and	#0x7F
-			call	#txt_output
+			call	txt_output
 			pop	af
 			bit	7,a
 			jr	z, rname
-			call	crlf
-			call	0xbc11			; get screen mode.
+			ld	a,#10
+			call	txt_output
+			ld	a,#13
+			call	txt_output
+			call	scr_get_mode			; get screen mode.
 			ld	b,#20
 			cp	#0
 			jr	z,m4helploop
@@ -5099,7 +5211,7 @@ m4helploop:	ld	a,(hl)
 			jr	m4helploop
 nextcolumn:	push	hl
 			ld	d,a
-			call	0xbb6f
+			call	txt_set_column
 			pop	hl
 			jr	m4helploop
 last_rsx:
@@ -5169,7 +5281,9 @@ snaload_str_hl:
 			ld	hl,#txt_sna_err
 			jp	disp_msg
 				
-valid_sna:			
+valid_sna:	
+
+		
 			di
 			
 			;  and copy to snamem, 0x100 bytes
@@ -5197,6 +5311,46 @@ valid_sna:
 			ld	bc,#ACKPORT
 			out (c),c							; tell M4 that command has been send
 		
+			; check if compressed
+			ld 	a,(#snamem+0x6B)
+			cp	#0
+			jr	nz, not_comp_sna
+			
+			; decompress sna to m4/tmp.bin
+			
+			ld	iy,(#rom_workspace)
+			ld	(iy),#3				; packet size, cmd (2), fd (1), size (2)
+			ld	1(iy),#C_SNAFLAT
+			ld	2(iy),#C_SNAFLAT>>8
+			;ld	a,3(iy)				; fd
+			
+			call	send_command_iy	; send read command packet
+			
+			ld	hl, #rom_response+3				; KB of decompressed sna
+			ld	bc,#DATAPORT					; data out port
+			out (c),c
+			ld	de,#C_ROMCP
+			out	(c),e						; command lo
+			out	(c),d						; command	hi
+			ld	de,#snamem+0x6B
+			out	(c),e						; rom dest addr lo
+			out	(c),d						; rom dest addr hi
+			xor	a
+			out	(c),a						; src rom bank (0 = m4)
+			
+			out	(c),l						; rom src addr lo
+			out	(c),h						; rom src addr hi
+			xor	a							; dest rom bank (0 = m4)
+			out	(c),a
+			
+			ld	de,#0x1
+			out	(c),e						; size lo
+			out	(c),d						; size hi
+			ld	bc,#ACKPORT
+			out (c),c							; tell M4 that command has been send
+			
+			
+not_comp_sna:			
 			
 			; prepare a read packet & close packet 
 			
@@ -5205,7 +5359,7 @@ valid_sna:
 			ld	(iy),#5				; packet size, cmd (2), fd (1), size (2)
 			ld	1(iy),#C_READ
 			ld	2(iy),#C_READ>>8
-			ld	3(iy),a				; fd
+			;ld	3(iy),a				; fd
 			ld	4(iy),#0				; chunk size low
 			ld	5(iy),#0x8			; chunk size high
 			
@@ -5251,7 +5405,6 @@ int_en:
 			ld	de,#sna_jumper
 			ld	bc,#15
 			call	 rom_write	
-			
 			
 			; read first 64 KB data
 			
@@ -5343,7 +5496,7 @@ SNA_SetupGA:	out (c),c
 			set	6,a
 			out	(c),a
 			dec	c
-			jr	nz,SNA_SetupGA
+			jp	p,SNA_SetupGA
 			
 			; Select last active pen
 			ld	a,(hl)
@@ -5444,6 +5597,7 @@ not_im2:
 
 			
 			ld	a,(#snamem+0x40)
+			or	#0x80
 			ld	c,a
 			ld	b,#0x7F
 			
@@ -5486,8 +5640,50 @@ rom_wrt_loop:	inc	b
 			out (c),c							; transfer!
 			pop	af
 			ret
-					
 			
+			; helper function for sna write (disable lowerrom)
+			; hl = address
+			; d = number of 1KB chunks
+			; e = file handle (REAL MODE)
+			; iy = return address
+			; stack space 4 (2 for DE, 2 for ret)
+memwrite:		
+			ld	bc,#0x7F86		; disable lowerrom
+			out	(c),c
+			ld	bc,#DATAPORT
+			out	(c),c			; ignore first byte
+			ld	a,#C_WRITE2&0xFF	
+			out	(c),a
+			ld	a,#C_WRITE2>>8	
+			out	(c),a			
+			out	(c),e			; fd
+			.db 0xDD,0x6B			; ld IXl, e
+			.db 0xDD,0x62			; ld IXh, d
+			ld	de,#0x400
+			out	(c),e			; size 00
+			out	(c),d			; size 0x0400
+			xor a
+memwrtloop:	inc	b
+			outi
+			dec	de
+			cp	e
+			jr	nz, memwrtloop
+			cp	d
+			jr	nz, memwrtloop
+			
+			
+			ld	b,#ACKPORT>>8	; kick command
+			out	(c),c
+			
+			.db 0xDD,0x5D			; ld e, IXl
+			.db 0xDD,0x54			; ld d, IXh
+			
+			dec	d
+			jr	nz, memwrite
+			ld	bc,#0x7F80		; enable lowerrom
+			out	(c),c
+			jp (iy)
+					
 
 data_0:		.db	0,1		
 romslots_fn:
@@ -5694,14 +5890,15 @@ sock_info:	.ds	80	; 5 socket status structures (0 is used for gethostbyname*, 1-
 ; *for socket 0, gethostbyname, status will be set to 5 when in progress and back to 0, when done.
 
 .org	rom_table
-			.dw	#0x204	; rom version
-			.dw	rom_response
-			.dw	rom_config
-			.dw	sock_info
-			.dw	helper_functions
-			.dw	run_filename
-			.dw	tape_functions
-         
+			.dw	#0x206	; rom version		0xFF00
+			.dw	rom_response		; 0xFF02
+			.dw	rom_config		; 0xFF04
+			.dw	sock_info			; 0xFF06
+			.dw	helper_functions	; 0xFF08
+			.dw	run_filename		; 0xFF0A
+			.dw	tape_functions		; 0xFF0C
+			.dw  snamem			; 0xFF0E
+         		.dw  memwrite			; 0xFF10
 ; SNA rom/ram switching, similar to SNArkos
 .org	0xFFF0
 sna_jumper:
