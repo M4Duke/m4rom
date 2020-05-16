@@ -23,7 +23,12 @@ C_READ2						.equ 0x4312
 C_GETPATH						.equ 0x4313
 C_SDREAD						.equ 0x4314
 C_SDWRITE						.equ 0x4315
-C_FSTAT						.equ 0x4316	
+C_FSTAT						.equ 0x4316
+C_SNAFLAT						.equ 0x4317	
+C_ROMSOFF						.equ 0x4318
+C_NMIOFF						.equ 0x4319
+C_RAMDISOFF					.equ 0x431A
+C_WRITE2						.equ 0x431B
 C_HTTPGET						.equ 0x4320
 C_SETNETWORK					.equ 0x4321
 C_M4OFF						.equ	0x4322

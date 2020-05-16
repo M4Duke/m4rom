@@ -29,10 +29,12 @@ txt_remove_cursor				.equ	0xbb8d
 km_read_char					.equ 0xbb09
 
 scr_get_mode					.equ	0xbc11
-
+mc_boot_program				.equ 0xbd13
 mc_start_program		   		.equ 0xbd16
 mc_wait_flyback				.equ 0xbd19
 kl_l_rom_enable				.equ	0xb906
 kl_rom_restore 				.equ 0xb90c
 kl_rom_select					.equ 0xb90f
 kl_curr_selection 				.equ 0xb912
+kl_ldir						.equ 0xb91b
+
