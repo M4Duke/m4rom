@@ -304,7 +304,7 @@ init_plus:	;ld	hl,#0
 			jp 	0x77
 
 init_msg:
-			.ascii " M4 Board v2.0.5"
+			.ascii " M4 Board v2.0.6"
 			.db 10, 13, 10, 13, 0
 				
 			; ------------------------- strncmp
